@@ -1,19 +1,19 @@
 from Acquisition import aq_parent
 from OFS.SimpleItem import SimpleItem
+from Products.CMFPlone.utils import safe_unicode
 from ZPublisher.BaseRequest import DefaultPublishTraverse
+from plone.app.event.base import guess_date_from
+from plone.event.interfaces import IEventAccessor
+from plone.event.interfaces import IEventRecurrence
+from plone.event.interfaces import IOccurrence
+from plone.event.interfaces import IRecurrenceSupport
+from plone.event.recurrence import recurrence_sequence_ical
+from plone.event.utils import is_same_day
 from zope.component import adapts
 from zope.interface import implements
 from zope.publisher.interfaces.browser import IBrowserPublisher
 
-from plone.event.recurrence import recurrence_sequence_ical
-from plone.event.interfaces import (
-        IEventRecurrence,
-        IEventAccessor,
-        IRecurrenceSupport,
-        IOccurrence
-)
-from plone.event.utils import is_same_day
-from plone.app.event.base import guess_date_from
+import itertools
 
 
 class RecurrenceSupport(object):
@@ -41,6 +41,13 @@ class RecurrenceSupport(object):
         starts = recurrence_sequence_ical(event.start,
                                           recrule=event.recurrence,
                                           from_=range_start, until=range_end)
+
+        if range_start and\
+            event.start < range_start and\
+            event.end >= range_start and\
+            event.start not in starts:
+            # Include event, which started before range but lasts until it.
+            starts = itertools.chain(starts, [event.start])
 
         # We get event ends by adding a duration to the start. This way, we
         # prevent that the start and end lists are of different size if an
@@ -110,7 +117,8 @@ class EventOccurrenceAccessor(object):
         object.__setattr__(self, '_own_attr', own_attr)
 
     def _get_context(self, name):
-        # TODO: save parent context on self, so it must not be called every time
+        # TODO: save parent context on self, so it must not be called every
+        #       time
         oa = self._own_attr
         if name in oa:
             return self.context
@@ -132,4 +140,4 @@ class EventOccurrenceAccessor(object):
 
     @property
     def url(self):
-        return self.context.absolute_url()
+        return safe_unicode(self.context.absolute_url())

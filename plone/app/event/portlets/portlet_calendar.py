@@ -1,23 +1,24 @@
-import calendar
 from Acquisition import aq_inner
 from Products.CMFCore.utils import getToolByName
 from Products.Five.browser.pagetemplatefile import ViewPageTemplateFile
+from plone.app.event.base import first_weekday
+from plone.app.event.base import get_events, construct_calendar
+from plone.app.event.base import localized_today
+from plone.app.event.base import wkday_to_mon1
+from plone.app.event.interfaces import ICalendarLinkbase
+from plone.app.portlets import PloneMessageFactory as _
 from plone.app.portlets.portlets import base
 from plone.app.vocabularies.catalog import SearchableTextSourceBinder
+from plone.event.interfaces import IEventAccessor
 from plone.portlets.interfaces import IPortletDataProvider
 from zope import schema
 from zope.formlib import form
 from zope.i18nmessageid import MessageFactory
 from zope.interface import implements
 
-from plone.event.interfaces import IEventAccessor
-from plone.app.event.base import first_weekday
-from plone.app.event.base import get_occurrences_by_date
-from plone.app.event.base import localized_today
-from plone.app.event.base import cal_to_strftime_wkday
-from plone.app.event.interfaces import ICalendarLinkbase
+import calendar
 
-from plone.app.portlets import PloneMessageFactory as _
+
 PLMF = MessageFactory('plonelocales')
 
 
@@ -82,11 +83,13 @@ class Renderer(base.Renderer):
                               default=self._ts.month_english(month))
 
         # strftime %w interprets 0 as Sunday unlike the calendar.
-        strftime_wkdays = [cal_to_strftime_wkday(day)
+        strftime_wkdays = [wkday_to_mon1(day)
                 for day in self.cal.iterweekdays()]
-        self.weekdays = [PLMF(self._ts.day_msgid(day, format='s'),
-                              default=self._ts.weekday_english(day, format='a'))
-                         for day in strftime_wkdays]
+        self.weekdays = [
+            PLMF(self._ts.day_msgid(day, format='s'),
+                 default=self._ts.weekday_english(day, format='a'))
+            for day in strftime_wkdays
+        ]
 
     def year_month_display(self):
         """ Return the year and month to display in the calendar.
@@ -94,7 +97,7 @@ class Renderer(base.Renderer):
         context = aq_inner(self.context)
         request = self.request
 
-        # Try to get year and month from requst
+        # Try to get year and month from request
         year = request.get('year', None)
         month = request.get('month', None)
 
@@ -115,17 +118,17 @@ class Renderer(base.Renderer):
         return year, month
 
     def get_previous_month(self, year, month):
-        if month==0 or month==1:
+        if month == 0 or month == 1:
             month, year = 12, year - 1
         else:
-            month-=1
+            month -= 1
         return (year, month)
 
     def get_next_month(self, year, month):
-        if month==12:
+        if month == 12:
             month, year = 1, year + 1
         else:
-            month+=1
+            month += 1
         return (year, month)
 
     def date_events_url(self, date):
@@ -150,8 +153,10 @@ class Renderer(base.Renderer):
         if data.state:
             query_kw['review_state'] = data.state
 
-        occurrences = get_occurrences_by_date(
-            context, monthdates[0], monthdates[-1], **query_kw)
+        events = get_events(context, start=monthdates[0], end=monthdates[-1],
+                            ret_mode=2, expand=True, **query_kw)
+        cal_dict = construct_calendar(events)
+
         # [[day1week1, day2week1, ... day7week1], [day1week2, ...]]
         caldata = [[]]
         for dat in monthdates:
@@ -159,8 +164,8 @@ class Renderer(base.Renderer):
                 caldata.append([])
             date_events = None
             isodat = dat.isoformat()
-            if isodat in occurrences:
-                date_events = occurrences[isodat]
+            if isodat in cal_dict:
+                date_events = cal_dict[isodat]
 
             events_string = u""
             if date_events:
@@ -172,7 +177,7 @@ class Renderer(base.Renderer):
                     # TODO: make 24/12 hr format configurable
                     base = u'<a href="%s"><span class="title">%s</span>'\
                            u'%s%s%s</a>'
-                    events_string +=  base % (
+                    events_string += base % (
                         accessor.url,
                         accessor.title.decode('utf-8'),
                         not whole_day and u' %s' % time or u'',
@@ -201,6 +206,7 @@ class AddForm(base.AddForm):
     def create(self, data):
         return Assignment(state=data.get('state', None),
                           search_base=data.get('search_base', None))
+
 
 class EditForm(base.EditForm):
     form_fields = form.Fields(ICalendarPortlet)

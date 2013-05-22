@@ -1,35 +1,45 @@
-from zope.component import adapts
-from zope.interface import implements
-
-from DateTime import DateTime
 from AccessControl import ClassSecurityInfo
-
-from Products.CMFCore.permissions import ModifyPortalContent
-from Products.CMFCore.permissions import View
+from DateTime import DateTime
 from Products.ATContentTypes.configuration import zconf
 from Products.ATContentTypes.content.base import ATCTContent
 from Products.ATContentTypes.content.base import registerATCT
 from Products.ATContentTypes.content.schemata import ATContentTypeSchema
 from Products.ATContentTypes.content.schemata import finalizeATCTSchema
 from Products.ATContentTypes.lib.historyaware import HistoryAwareMixin
-from Products.ATContentTypes import ATCTMessageFactory as _
-
-from plone.formwidget.recurrence.at.widget import RecurrenceWidget
-from plone.formwidget.datetime.at import DatetimeWidget
-from plone.uuid.interfaces import IUUID
-
+from Products.CMFCore.permissions import ModifyPortalContent
+from Products.CMFCore.permissions import View
+from Products.CMFPlone.utils import safe_unicode
+from plone.app.event import messageFactory as _
 from plone.app.event.at import atapi
 from plone.app.event.at import packageName
 from plone.app.event.at.interfaces import IATEvent, IATEventRecurrence
+from plone.app.event.base import DT
+from plone.app.event.base import default_end as default_end_dt
+from plone.app.event.base import default_start as default_start_dt
+from plone.app.event.base import default_timezone
+from plone.app.event.base import first_weekday
+from plone.app.event.base import wkday_to_mon1
 from plone.event.interfaces import IEvent
 from plone.event.interfaces import IEventAccessor
-from plone.event.utils import utc
-from plone.app.event.base import default_end_DT
-from plone.app.event.base import default_start_DT
-from plone.app.event.base import default_timezone
-from plone.app.event.base import DT
-from plone.app.event.base import first_weekday_sun0
 from plone.event.utils import pydt
+from plone.event.utils import utc
+from plone.formwidget.datetime.at import DatetimeWidget
+from plone.formwidget.recurrence.at.widget import RecurrenceWidget
+from plone.uuid.interfaces import IUUID
+from zope.component import adapts
+from zope.event import notify
+from zope.interface import implements
+from zope.lifecycleevent import ObjectModifiedEvent
+
+
+def default_start():
+    return DT(default_start_dt())
+
+def default_end():
+    return DT(default_end_dt())
+
+def first_weekday_sun0():
+    return wkday_to_mon1(first_weekday())
 
 
 ATEventSchema = ATContentTypeSchema.copy() + atapi.Schema((
@@ -39,7 +49,7 @@ ATEventSchema = ATContentTypeSchema.copy() + atapi.Schema((
         searchable=False,
         accessor='start',
         write_permission=ModifyPortalContent,
-        default_method=default_start_DT,
+        default_method=default_start,
         languageIndependent=True,
         widget=DatetimeWidget(
             label=_(u'label_event_start', default=u'Event Starts'),
@@ -55,7 +65,7 @@ ATEventSchema = ATContentTypeSchema.copy() + atapi.Schema((
         searchable=False,
         accessor='end',
         write_permission=ModifyPortalContent,
-        default_method=default_end_DT,
+        default_method=default_end,
         languageIndependent=True,
         widget=DatetimeWidget(
             label=_(u'label_event_end', default=u'Event Ends'),
@@ -67,12 +77,24 @@ ATEventSchema = ATContentTypeSchema.copy() + atapi.Schema((
         ),
 
     atapi.BooleanField('wholeDay',
+        required=False,
         default=False,
         write_permission=ModifyPortalContent,
         languageIndependent=True,
         widget=atapi.BooleanWidget(
-            label=_(u'label_whole_day_event', u'Whole day event'),
+            label=_(u'label_whole_day', default=u'Whole day event'),
             description=_(u'help_whole_day', default=u"Event lasts whole day"),
+            ),
+        ),
+
+    atapi.BooleanField('openEnd',
+        required=False,
+        default=False,
+        write_permission=ModifyPortalContent,
+        widget=atapi.BooleanWidget(
+            label=_(u'label_open_end', default=u"Open end event"),
+            description=_(u'help_open_end',
+                default=u"This event is open ended."),
             ),
         ),
 
@@ -199,6 +221,9 @@ ATEventSchema['subject'].widget.label = _(u'label_event_type',
 ATEventSchema['subject'].widget.size = 6
 ATEventSchema.changeSchemataForField('subject', 'default')
 
+ATEventSchema.changeSchemataForField('timezone', 'dates')
+ATEventSchema.moveField('timezone', before='effectiveDate')
+
 finalizeATCTSchema(ATEventSchema)
 # finalizeATCTSchema moves 'location' into 'categories', we move it back:
 ATEventSchema.changeSchemataForField('location', 'default')
@@ -215,6 +240,54 @@ class ATEvent(ATCTContent, HistoryAwareMixin):
     schema = ATEventSchema
     security = ClassSecurityInfo()
     portal_type = archetype_name = 'Event'
+
+
+    cmf_edit_kws = ('effectiveDay', 'effectiveMo', 'effectiveYear',
+                    'expirationDay', 'expirationMo', 'expirationYear',
+                    'start_time', 'startAMPM', 'stop_time', 'stopAMPM',
+                    'start_date', 'end_date', 'contact_name', 'contact_email',
+                    'contact_phone', 'event_url')
+    security.declarePrivate('cmf_edit')
+    def cmf_edit(
+        self, title=None, description=None, effectiveDay=None,
+        effectiveMo=None, effectiveYear=None, expirationDay=None,
+        expirationMo=None, expirationYear=None, start_date=None,
+        start_time=None, startAMPM=None, end_date=None,
+        stop_time=None, stopAMPM=None, location=None,
+        contact_name=None, contact_email=None, contact_phone=None,
+        event_url=None):
+
+        if effectiveDay and effectiveMo and effectiveYear and start_time:
+            sdate = '%s-%s-%s %s %s' % (effectiveDay, effectiveMo, effectiveYear,
+                                         start_time, startAMPM)
+        elif start_date:
+            if not start_time:
+                start_time = '00:00:00'
+            sdate = '%s %s' % (start_date, start_time)
+        else:
+            sdate = None
+
+        if expirationDay and expirationMo and expirationYear and stop_time:
+            edate = '%s-%s-%s %s %s' % (expirationDay, expirationMo,
+                                        expirationYear, stop_time, stopAMPM)
+        elif end_date:
+            if not stop_time:
+                stop_time = '00:00:00'
+            edate = '%s %s' % (end_date, stop_time)
+        else:
+            edate = None
+
+        if sdate and edate:
+            if edate < sdate:
+                edate = sdate
+            self.setStartDate(sdate)
+            self.setEndDate(edate)
+
+        self.update(
+            title=title, description=description, location=location,
+            contactName=contact_name, contactEmail=contact_email,
+            contactPhone=contact_phone, eventUrl=event_url)
+
 
     security.declareProtected(View, 'post_validate')
     def post_validate(self, REQUEST=None, errors=None):
@@ -281,30 +354,28 @@ class ATEvent(ATCTContent, HistoryAwareMixin):
             return None
 
     def _dt_setter(self, fieldtoset, value, **kwargs):
-        # Always set the date in UTC, saving the timezone in another field.
-        # But since the timezone value isn't known at the time of saving the
-        # form, we have to save it timezone-naive first and let
-        # timezone_handler convert it to the target zone afterwards.
-
+        """Always set the date in UTC, saving the timezone in another field.
+        But since the timezone value isn't known at the time of saving the
+        form, we have to save it timezone-naive first and let
+        timezone_handler convert it to the target zone afterwards.
+        """
         # Note: The name of the first parameter shouldn't be field, because
         # it's already in kwargs in some case.
 
-        if not isinstance(value, DateTime): value = DateTime(value)
+        if not isinstance(value, DateTime):
+            value = DT(value)
 
-        # Get microseconds from seconds, which is a floating value. Round it
-        # up, to bypass precision errors.
-        micro = int(round(value.second()%1 * 1000000))
-
-        value = DateTime('%04d-%02d-%02dT%02d:%02d:%02d%s' % (
-                    value.year(),
-                    value.month(),
-                    value.day(),
-                    value.hour(),
-                    value.minute(),
-                    value.second(),
-                    micro and '.%s' % micro or ''
-                    )
-                )
+        # This way, we set DateTime timezoneNaive
+        value = DateTime(
+            '%04d-%02d-%02dT%02d:%02d:%02d' % (
+                value.year(),
+                value.month(),
+                value.day(),
+                value.hour(),
+                value.minute(),
+                int(value.second())  # No microseconds
+            )
+        )
         self.getField(fieldtoset).set(self, value, **kwargs)
 
     security.declareProtected('View', 'start')
@@ -332,7 +403,7 @@ class ATEvent(ATCTContent, HistoryAwareMixin):
         :rtype: Python datetime
 
         """
-        return pydt(self.start())
+        return pydt(self.start(), exact=False)
 
     security.declareProtected(View, 'end_date')
     @property
@@ -346,7 +417,7 @@ class ATEvent(ATCTContent, HistoryAwareMixin):
         :rtype: Python datetime
 
         """
-        return pydt(self.end())
+        return pydt(self.end(), exact=False)
 
     security.declareProtected(View, 'duration')
     @property
@@ -414,9 +485,8 @@ def data_postprocessing(obj, event):
     isn't known, so we have to convert those timezone-naive dates into
     timezone-aware ones afterwards.
 
-    For whole day events, set start time to 0:00:00 and end time toZone
-    23:59:59.
-
+    For whole day events, set start time to 0:00:00 and end time to 23:59:59.
+    For open end events, set end time to 23:59:59.
     """
 
     if not IEvent.providedBy(obj):
@@ -453,14 +523,19 @@ def data_postprocessing(obj, event):
             value.day(),
             value.hour(),
             value.minute(),
-            value.second(),
+            int(value.second()),  # No microseconds
             timezone)
 
     start = make_DT(start, timezone)
     end = make_DT(end, timezone)
 
-    if obj.getWholeDay():
+    whole_day = obj.getWholeDay()
+    open_end = obj.getOpenEnd()
+    if whole_day:
         start = DateTime('%s 0:00:00 %s' % (start.Date(), timezone))
+    if open_end:
+        end = start  # Open end events end on same day
+    if open_end or whole_day:
         end = DateTime('%s 23:59:59 %s' % (end.Date(), timezone))
 
     start_field.set(obj, start.toZone('UTC'))
@@ -477,9 +552,38 @@ class EventAccessor(object):
     """
     implements(IEventAccessor)
     adapts(IATEvent)
+    event_type = 'Event'  # If you use a custom content-type, override this.
 
     def __init__(self, context):
         self.context = context
+
+
+    # Unified create method via Accessor
+    @classmethod
+    def create(cls, container, content_id, title, description=None,
+               start=None, end=None, timezone=None, whole_day=None,
+               open_end=None, **kwargs):
+        container.invokeFactory(cls.event_type,
+                                id=content_id,
+                                title=title,
+                                description=description,
+                                startDate=start,
+                                endDate=end,
+                                wholeDay=whole_day,
+                                open_end=open_end,
+                                timezone=timezone)
+        content = container[content_id]
+        acc = IEventAccessor(content)
+        acc.edit(**kwargs)
+        return acc
+
+    def edit(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        notify(ObjectModifiedEvent(self.context))
+
+
+    # RO PROPERTIES
 
     @property
     def uid(self):
@@ -487,7 +591,7 @@ class EventAccessor(object):
 
     @property
     def url(self):
-        return self.context.absolute_url()
+        return safe_unicode(self.context.absolute_url())
 
     @property
     def created(self):
@@ -504,31 +608,31 @@ class EventAccessor(object):
     # rw properties not in behaviors (yet) # TODO revisit
     @property
     def title(self):
-        return getattr(self.context, 'title', None)
+        return safe_unicode(getattr(self.context, 'title', None))
     @title.setter
     def title(self, value):
-        setattr(self.context, 'title', value)
+        setattr(self.context, 'title', safe_unicode(value))
 
     @property
     def description(self):
-        return self.context.Description()
+        return safe_unicode(self.context.Description())
     @description.setter
     def description(self, value):
-        self.context.setDescription(value)
+        self.context.setDescription(safe_unicode(value))
 
     @property
     def start(self):
         return self.context.start_date
     @start.setter
     def start(self, value):
-        self.context.setStartDate(DT(value))
+        self.context.setStartDate(value)
 
     @property
     def end(self):
         return self.context.end_date
     @end.setter
     def end(self, value):
-        self.context.setEndDate(DT(value))
+        self.context.setEndDate(value)
 
     @property
     def whole_day(self):
@@ -538,71 +642,80 @@ class EventAccessor(object):
         self.context.setWholeDay(value)
 
     @property
+    def open_end(self):
+        return self.context.getOpenEnd()
+    @open_end.setter
+    def open_end(self, value):
+        self.context.setOpenEnd(value)
+
+    @property
     def timezone(self):
-        return self.context.getTimezone()
+        return safe_unicode(self.context.getTimezone())
     @timezone.setter
     def timezone(self, value):
-        self.context.setTimezone(value)
+        self.context.setTimezone(safe_unicode(value))
 
     @property
     def recurrence(self):
-        return self.context.getRecurrence()
+        return safe_unicode(self.context.getRecurrence())
     @recurrence.setter
     def recurrence(self, value):
-        self.context.setRecurrence(value)
+        self.context.setRecurrence(safe_unicode(value))
 
     @property
     def location(self):
-        return self.context.location
+        return safe_unicode(self.context.getLocation())
     @location.setter
     def location(self, value):
-        self.context.setLocation(value)
+        self.context.setLocation(safe_unicode(value))
 
     @property
     def attendees(self):
-        return self.context.attendees
+        return self.context.getAttendees()
     @attendees.setter
     def attendees(self, value):
-        self.context.setAttendees(value)
+        if value:
+            self.context.setAttendees(value)
 
     @property
     def contact_name(self):
-        return self.context.contactName
+        return safe_unicode(self.context.contact_name())
     @contact_name.setter
     def contact_name(self, value):
-        self.context.setContactName(value)
+        self.context.setContactName(safe_unicode(value))
 
     @property
     def contact_email(self):
-        return self.context.contactEmail
+        return safe_unicode(self.context.contact_email())
     @contact_email.setter
     def contact_email(self, value):
-        self.context.setContactEmail(value)
+        self.context.setContactEmail(safe_unicode(value))
 
     @property
     def contact_phone(self):
-        return self.context.contactPhone
+        return safe_unicode(self.context.contact_phone())
     @contact_phone.setter
     def contact_phone(self, value):
-        self.context.setContactPhone(value)
+        self.context.setContactPhone(safe_unicode(value))
 
     @property
     def event_url(self):
-        return self.context.eventUrl
+        return safe_unicode(self.context.event_url())
     @event_url.setter
     def event_url(self, value):
-        self.context.setEventUrl(value)
+        self.context.setEventUrl(safe_unicode(value))
 
     @property
     def subjects(self):
         return self.context.Subject()
     @subjects.setter
     def subjects(self, value):
-        self.context.setSubject(value)
+        if value:
+            self.context.setSubject(value)
 
     @property
     def text(self):
-        return self.context.getText()
+        return safe_unicode(self.context.getText())
     @text.setter
     def text(self, value):
-        self.context.setText(value)
+        self.context.setText(safe_unicode(value))

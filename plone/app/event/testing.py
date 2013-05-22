@@ -1,5 +1,5 @@
-import os
 from Products.DateRecurringIndex.testing import DRI_FIXTURE
+from plone.app.event.interfaces import IEventSettings
 from plone.app.testing import IntegrationTesting
 from plone.app.testing import PLONE_FIXTURE
 from plone.app.testing import PloneSandboxLayer
@@ -7,7 +7,7 @@ from plone.registry.interfaces import IRegistry
 from plone.testing import z2
 from zope.component import getUtility
 
-from plone.app.event.interfaces import IEventSettings
+import os
 
 
 def set_timezone(tz):
@@ -84,8 +84,6 @@ class PAEventDXLayer(PloneSandboxLayer):
         import plone.app.event.dx
         self.loadZCML(package=plone.app.event.dx, context=configurationContext)
 
-        z2.installProduct(app, 'plone.app.event.dx')
-
     def setUpPloneSite(self, portal):
         self.applyProfile(portal, 'plone.app.event.dx:default')
         set_timezone(tz='UTC')
@@ -104,17 +102,20 @@ class PAEventATDXLayer(PloneSandboxLayer):
         # Load ZCML
         import plone.app.event.at
         self.loadZCML(package=plone.app.event.at, context=configurationContext)
-
         z2.installProduct(app, 'plone.app.event.at')
 
         import plone.app.event.dx
         self.loadZCML(package=plone.app.event.dx, context=configurationContext)
 
-        z2.installProduct(app, 'plone.app.event.dx')
+        import plone.app.collection
+        self.loadZCML(package=plone.app.collection, context=configurationContext)
+        z2.installProduct(app, 'plone.app.collection')
+
 
     def setUpPloneSite(self, portal):
         self.applyProfile(portal, 'plone.app.event.at:default')
         self.applyProfile(portal, 'plone.app.event.dx:default')
+        self.applyProfile(portal, 'plone.app.collection:default')
         set_timezone(tz='UTC')
 
 

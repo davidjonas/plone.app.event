@@ -1,32 +1,32 @@
-import datetime
-import pytz
-import unittest2 as unittest
-import zope.component
 from DateTime import DateTime
-from plone.app.layout.navigation.interfaces import INavigationRoot
-from plone.app.testing import TEST_USER_ID
-from plone.app.testing import setRoles
-from plone.registry.interfaces import IRegistry
-from zope.interface import directlyProvides
-
-from plone.app.event.base import (
-    DEFAULT_END_DELTA,
-    DT,
-    default_end_DT,
-    default_end_dt,
-    default_start_DT,
-    default_start_dt,
-    default_timezone,
-    get_occurrences_from_brains,
-    get_portal_events,
-    localized_now,
-    dates_for_display
-)
 from plone.app.event import base
-from plone.app.event.interfaces import IEventSettings, ICalendarLinkbase
+from plone.app.event.at.content import EventAccessor as ATEventAccessor
+from plone.app.event.base import DEFAULT_END_DELTA
+from plone.app.event.base import DT
+from plone.app.event.base import construct_calendar
+from plone.app.event.base import dates_for_display
+from plone.app.event.base import default_end
+from plone.app.event.base import default_start
+from plone.app.event.base import default_timezone
+from plone.app.event.base import get_events
+from plone.app.event.base import localized_now
+from plone.app.event.dx.behaviors import EventAccessor as DXEventAccessor
+from plone.app.event.interfaces import ICalendarLinkbase
 from plone.app.event.testing import PAEventAT_INTEGRATION_TESTING
 from plone.app.event.testing import PAEventDX_INTEGRATION_TESTING
 from plone.app.event.testing import PAEvent_INTEGRATION_TESTING
+from plone.app.event.tests.base_setup import AbstractSampleDataEvents
+from plone.app.layout.navigation.interfaces import INavigationRoot
+from plone.app.testing import TEST_USER_ID
+from plone.app.testing import setRoles
+from plone.event.interfaces import IEvent
+from plone.event.interfaces import IEventAccessor
+from plone.event.utils import pydt
+from zope.interface import directlyProvides
+
+import datetime
+import pytz
+import unittest2 as unittest
 
 
 class TestBaseModule(unittest.TestCase):
@@ -38,91 +38,103 @@ class TestBaseModule(unittest.TestCase):
     def assertEqualDatetime(self, date1, date2, msg=None):
         """ Compare two datetime instances to a resolution of minutes.
         """
-        compare_str = '%Y-%m-%d %H:%M %Z'
-        self.assertTrue(date1.strftime(compare_str) ==\
-                        date2.strftime(compare_str), msg)
+        format_ = '%Y-%m-%d %H:%M %Z'
+        self.assertEqual(date1.strftime(format_), date2.strftime(format_), msg)
 
-    def test_default_end_dt(self):
+    def test_default_end(self):
         self.assertEqualDatetime(
-            default_end_dt() - datetime.timedelta(hours=DEFAULT_END_DELTA),
+            default_end() - datetime.timedelta(hours=DEFAULT_END_DELTA),
             localized_now())
 
-    def test_default_start_dt(self):
-        self.assertEqualDatetime(default_start_dt(), localized_now())
-
-    def test_default_end_DT(self):
-        DTE = default_end_DT()
-        DTN = DT(localized_now() + datetime.timedelta(hours=DEFAULT_END_DELTA))
-
-        self.assertTrue(DTE.year() == DTN.year() and
-                        DTE.month() == DTN.month() and
-                        DTE.day() == DTN.day() and
-                        DTE.hour() == DTN.hour() and
-                        DTE.minute() == DTN.minute())
-
-    def test_default_start_DT(self):
-        DTS = default_start_DT()
-        DTN = DT(localized_now())
-
-        self.assertTrue(DTS.year() == DTN.year() and
-                        DTS.month() == DTN.month() and
-                        DTS.day() == DTN.day() and
-                        DTS.hour() == DTN.hour() and
-                        DTS.minute() == DTN.minute())
+    def test_default_start(self):
+        self.assertEqualDatetime(default_start(), localized_now())
 
     def test_DT(self):
         # Python datetime with valid zone. Zope converts it to GMT+1...
         # TODO: DateTime better shouldn't do this!
         cet = pytz.timezone('CET')
-        self.assertTrue(
-            DT(datetime.datetime(2011, 11, 11, 11, 0, 0, tzinfo=cet)) ==
+        self.assertEqual(
+            DT(datetime.datetime(2011, 11, 11, 11, 0, 0, tzinfo=cet)),
             DateTime('2011/11/11 11:00:00 GMT+1')
         )
 
         # Python dates get converted to a DateTime with timecomponent including
         # a timezone
-        self.assertTrue(
-            DT(datetime.date(2011, 11, 11)) ==
+        self.assertEqual(
+            DT(datetime.date(2011, 11, 11)),
             DateTime('2011/11/11 00:00:00 UTC')
         )
 
         # DateTime with valid zone
-        self.assertTrue(
-            DT(DateTime(2011, 11, 11, 11, 0, 0, 'Europe/Vienna')) ==
+        self.assertEqual(
+            DT(DateTime(2011, 11, 11, 11, 0, 0, 'Europe/Vienna')),
             DateTime('2011/11/11 11:00:00 Europe/Vienna')
         )
 
         # Zope DateTime with valid DateTime zone but invalid pytz is kept as is
-        self.assertTrue(
-            DT(DateTime(2011, 11, 11, 11, 0, 0, 'GMT+1')) ==
+        self.assertEqual(
+            DT(DateTime(2011, 11, 11, 11, 0, 0, 'GMT+1')),
             DateTime('2011/11/11 11:00:00 GMT+1')
         )
 
         # Invalid datetime zones are converted to the portal timezone
         # Testing with no timezone
-        self.assertTrue(
-            DT(datetime.datetime(2011, 11, 11, 11, 0, 0)) ==
+        self.assertEqual(
+            DT(datetime.datetime(2011, 11, 11, 11, 0, 0)),
             DateTime('2011/11/11 11:00:00 UTC')
         )
 
-        # Testing conversion of datetime with microseconds
+        # Conversion from string
+        self.assertEqual(
+            DT('2011/11/11 11:00:00 Europe/Vienna'),
+            DateTime('2011/11/11 11:00:00 Europe/Vienna')
+        )
+
+        ## TEST WITH/WITHOUT MICROSECONDS
+
+        # From Python datetime
+
         tz = pytz.timezone('Europe/Vienna')
-        self.assertTrue(
+
+        # exact=False
+        self.assertEqual(
             DT(datetime.datetime(2012, 12, 12, 10, 10, 10, 123456,
-               tzinfo=tz)) ==
+               tzinfo=tz), exact=False),
+            DateTime('2012/12/12 10:10:10 Europe/Vienna')
+        )
+
+        # exact=True
+        self.assertEqual(
+            DT(datetime.datetime(2012, 12, 12, 10, 10, 10, 123456,
+               tzinfo=tz), exact=True),
             DateTime('2012/12/12 10:10:10.123456 Europe/Vienna')
         )
 
+        # From Zope DateTime
 
-    def test_cal_to_strftime_wkday(self):
-        from plone.app.event.base import cal_to_strftime_wkday
-        li = [cal_to_strftime_wkday(day) for day in range(0,7)]
-        self.assertTrue(li == [1, 2, 3, 4, 5, 6, 0])
+        # Exact=False
+        self.assertEqual(
+            DT(DateTime(2012, 12, 12, 10, 10, 10.123456, 'Europe/Vienna'),
+               exact=False),
+            DateTime('2012/12/12 10:10:10 Europe/Vienna')
+        )
 
-    def test_strftime_to_cal_wkday(self):
-        from plone.app.event.base import strftime_to_cal_wkday
-        li = [strftime_to_cal_wkday(day) for day in range(0,7)]
-        self.assertTrue(li == [6, 0, 1, 2, 3, 4, 5])
+        # Exact=True
+        self.assertEqual(
+            DT(DateTime(2012, 12, 12, 10, 10, 10.123456, 'Europe/Vienna'),
+               exact=True),
+            DateTime('2012/12/12 10:10:10.123456 Europe/Vienna')
+        )
+
+    def test_wkday_to_mon1(self):
+        from plone.app.event.base import wkday_to_mon1
+        li = [wkday_to_mon1(day) for day in range(0, 7)]
+        self.assertEqual(li, [1, 2, 3, 4, 5, 6, 0])
+
+    def test_wkday_to_mon0(self):
+        from plone.app.event.base import wkday_to_mon0
+        li = [wkday_to_mon0(day) for day in range(0, 7)]
+        self.assertEqual(li, [6, 0, 1, 2, 3, 4, 5])
 
     def test__default_timezone(self):
         """Test, if default_timezone returns something other than None if
@@ -133,17 +145,17 @@ class TestBaseModule(unittest.TestCase):
 
     def test__dt_start_of_day(self):
         from plone.app.event.base import dt_start_of_day
-        self.assertTrue(dt_start_of_day(datetime.datetime(2013,2,1,18,35))
-                        == datetime.datetime(2013,2,1,0,0,0,0))
-        self.assertTrue(dt_start_of_day(datetime.date(2013,2,1))
-                        == datetime.datetime(2013,2,1,0,0,0,0))
+        self.assertEqual(dt_start_of_day(datetime.datetime(2013,2,1,18,35)),
+                         datetime.datetime(2013,2,1,0,0,0,0))
+        self.assertEqual(dt_start_of_day(datetime.date(2013,2,1)),
+                         datetime.datetime(2013,2,1,0,0,0,0))
 
     def test__dt_end_of_day(self):
         from plone.app.event.base import dt_end_of_day
-        self.assertTrue(dt_end_of_day(datetime.datetime(2013,2,1,18,35))
-                        == datetime.datetime(2013,2,1,23,59,59,0))
-        self.assertTrue(dt_end_of_day(datetime.date(2013,2,1))
-                        == datetime.datetime(2013,2,1,23,59,59,0))
+        self.assertEqual(dt_end_of_day(datetime.datetime(2013,2,1,18,35)),
+                         datetime.datetime(2013,2,1,23,59,59,0))
+        self.assertEqual(dt_end_of_day(datetime.date(2013,2,1)),
+                         datetime.datetime(2013,2,1,23,59,59,0))
 
     def test__start_end_from_mode(self):
         from plone.app.event.base import start_end_from_mode
@@ -259,7 +271,7 @@ class TestCalendarLinkbase(unittest.TestCase):
     def test_date_events_url(self):
         lb = ICalendarLinkbase(self.portal)
         url = 'http://nohost/plone/@@event_listing?mode=day&date=2012-12-07'
-        self.assertTrue(lb.date_events_url('2012-12-07') == url)
+        self.assertEqual(lb.date_events_url('2012-12-07'), url)
 
     def test_all_events_url(self):
         lb = ICalendarLinkbase(self.portal)
@@ -296,257 +308,148 @@ class TestCalendarLinkbase(unittest.TestCase):
         self.failUnless(lb.past_events_url() == url)
 
 
-class TestBaseModuleQueryPydt(unittest.TestCase):
-    layer = PAEventAT_INTEGRATION_TESTING
+class TestGetEventsDX(AbstractSampleDataEvents):
+    """Test get_events with DX objects.
+    """
+    layer = PAEventDX_INTEGRATION_TESTING
+    def event_factory(self):
+        return DXEventAccessor.create
 
-    def setUp(self):
-        self.portal = self.layer['portal']
-        default_tz = default_timezone()
-        #default_tz = 'Europe/Vienna'
-
-        reg = zope.component.getUtility(IRegistry)
-        settings = reg.forInterface(IEventSettings, prefix="plone.app.event")
-        settings.portal_timezone = default_tz
-
-        now = localized_now()
-        past = now - datetime.timedelta(days=2)
-        future = now + datetime.timedelta(days=2)
-        far = now + datetime.timedelta(days=8)
-
-        setRoles(self.portal, TEST_USER_ID, ['Manager'])
-
-        self.portal.invokeFactory(
-            'Event',
-            'past',
-            title=u'Past event',
-            startDate=past,
-            endDate=past + datetime.timedelta(hours=1),
-            location=u'Vienna',
-            timezone=default_tz)
-
-        self.portal.invokeFactory(
-            'Event',
-            'now',
-            title=u'Now event',
-            startDate=now,
-            endDate=now + datetime.timedelta(hours=1),
-            location=u'Vienna',
-            recurrence='RRULE:FREQ=DAILY;COUNT=4;INTERVAL=4',
-            timezone=default_tz)
-
-        self.portal.invokeFactory(
-            'Event',
-            'future',
-            title=u'Future event',
-            startDate=future,
-            endDate=future + datetime.timedelta(hours=1),
-            location=u'Graz',
-            timezone=default_tz)
-
-        self.portal.invokeFactory('Folder', 'sub', title=u'sub')
-        self.portal.sub.invokeFactory(
-            'Event',
-            'long',
-            title=u'Long event',
-            startDate=past,
-            endDate=future,
-            location=u'Schaftal',
-            timezone=default_tz)
-
-        self.now = now
-        self.past = past
-        self.future = future
-        self.far = far
-
-        self.now_event = self.portal['now']
-        self.past_event = self.portal['past']
-        self.future_event = self.portal['future']
-        self.long_event = self.portal['sub']['long']
-
-
-    def test_get_portal_events(self):
+    def test_get_events(self):
 
         # whole range
-        res = get_portal_events(self.portal)
-        self.assertTrue(len(res) == 4)
+        res = get_events(self.portal)
+        self.assertEqual(len(res), 4)
 
-        res = get_portal_events(self.portal,
-                                 range_start=self.past,
-                                 range_end=self.future)
-        self.assertTrue(len(res) == 4)
+        res = get_events(self.portal,
+                         start=self.past,
+                         end=self.future)
+        self.assertEqual(len(res), 4)
 
-        res = get_portal_events(self.portal,
-                                 range_end=self.future)
-        self.assertTrue(len(res) == 4)
+        res = get_events(self.portal,
+                         end=self.future)
+        self.assertEqual(len(res), 4)
 
-        res = get_portal_events(self.portal,
-                                 range_start=self.past)
-        self.assertTrue(len(res) == 4)
+        res = get_events(self.portal,
+                         start=self.past)
+        self.assertEqual(len(res), 4)
 
+        # Limit
+        res = get_events(self.portal, limit=2)
+        self.assertEqual(len(res), 2)
+
+        # Return objects
+        res = get_events(self.portal, ret_mode=2)
+        self.assertTrue(IEvent.providedBy(res[0]))
+
+        # Return IEventAccessor
+        res = get_events(self.portal, ret_mode=3)
+        self.assertTrue(IEventAccessor.providedBy(res[0]))
+        # Test sorting
+        self.assertTrue(res[0].start < res[-1].start)
+
+        # Test reversed sorting
+        res = get_events(self.portal, ret_mode=3, sort_reverse=True)
+        self.assertTrue(res[0].start > res[-1].start)
+
+        # Test sort_on
+        res = get_events(self.portal, ret_mode=3, sort="start")
+        self.assertEqual(
+            [it.title for it in res][2:],
+            [u'Now Event', u'Future Event']
+        )
+        res = get_events(self.portal, ret_mode=3, sort="end")
+        self.assertEqual(
+            [it.title for it in res],
+            [u'Past Event', u'Now Event', u'Future Event', u'Long Event']
+        )
+
+        # Test expansion
+        res = get_events(self.portal, ret_mode=2, expand=True)
+        self.assertEqual(len(res), 8)
+
+        res = get_events(self.portal, ret_mode=3, expand=True)
+        self.assertEqual(len(res), 8)
+        # Test sorting
+        self.assertTrue(res[0].start < res[-1].start)
+
+        res = get_events(self.portal, ret_mode=3, expand=True,
+                         sort_reverse=True)
+        # Test sorting
+        self.assertTrue(res[0].start > res[-1].start)
 
         # only on now-date
-        res = get_portal_events(self.portal,
-                                 range_start=self.now,
-                                 range_end=self.now)
-        self.assertTrue(len(res) == 2)
+        res = get_events(self.portal,
+                         start=self.now,
+                         end=self.now)
+        self.assertEqual(len(res), 2)
 
         # only on now-date as date
-        res = get_portal_events(self.portal,
-                                 range_start=self.now.date(),
-                                 range_end=self.now.date())
-        self.assertTrue(len(res) == 2)
+        # NOTE: converting self.now to python datetime to allow testing also
+        # with dates as Zope DateTime objects.
+        res = get_events(self.portal,
+                         start=pydt(self.now).date(),
+                         end=pydt(self.now).date())
+        self.assertEqual(len(res), 2)
 
         # only on past date
-        res = get_portal_events(self.portal,
-                                 range_start=self.past,
-                                 range_end=self.past)
-        self.assertTrue(len(res) == 2)
+        res = get_events(self.portal,
+                         start=self.past,
+                         end=self.past)
+        self.assertEqual(len(res), 2)
 
-        # one recurrence occurrence in future
-        res = get_portal_events(self.portal,
-                                 range_start=self.far,
-                                 range_end=self.far)
-        self.assertTrue(len(res) == 1)
+        # one recurrence occurrence in far future
+        res = get_events(self.portal,
+                         start=self.far,
+                         end=self.far)
+        self.assertEqual(len(res), 1)
 
         # from now on
-        res = get_portal_events(self.portal,
-                                 range_start=self.now)
-        self.assertTrue(len(res) == 3)
+        res = get_events(self.portal,
+                         start=self.now)
+        self.assertEqual(len(res), 3)
 
         # until now
-        res = get_portal_events(self.portal,
-                                 range_end=self.now)
-        self.assertTrue(len(res) == 3)
+        res = get_events(self.portal,
+                         end=self.now)
+        self.assertEqual(len(res), 3)
 
         # in subfolder
         path = '/'.join(self.portal.sub.getPhysicalPath())
-        res = get_portal_events(self.portal, path=path)
-        self.assertTrue(len(res) == 1)
+        res = get_events(self.portal, path=path)
+        self.assertEqual(len(res), 1)
 
-    def test_get_occurrences(self):
-        get_occurrences_from_brains(object, [],
-                range_start=datetime.datetime.today())
+    def test_construct_calendar(self):
+        res = get_events(self.portal, ret_mode=2, expand=True)
+        cal = construct_calendar(res)  # keys are date-strings.
+        # Should be more than one, but we can't exactly say how much. This
+        # depends on the date, the test is run. E.g. on last day of month, only
+        # long, past and now without recurrences are returned, others are in
+        # next month.
+        self.assertTrue(len(cal.keys()) > 1)
 
-class TestBaseModuleQueryZDT(unittest.TestCase):
+
+class TestGetEventsATPydt(TestGetEventsDX):
+    """Test get_events with AT objects and datetime based dates.
+    """
+    layer = PAEventAT_INTEGRATION_TESTING
+    def event_factory(self):
+        return ATEventAccessor.create
+
+
+class TestGetEventsATZDT(TestGetEventsATPydt):
+    """Test get_events with AT objects and Zope DateTime based dates.
+    """
     layer = PAEventAT_INTEGRATION_TESTING
 
-    def setUp(self):
-        self.portal = self.layer['portal']
-        default_tz = default_timezone()
-
-        reg = zope.component.getUtility(IRegistry)
-        settings = reg.forInterface(IEventSettings, prefix="plone.app.event")
-        settings.portal_timezone = default_tz
-
-        # Zope DateTime
-        now =    DateTime(2012, 9,10,10,10, 0, default_tz)
-        past =   DateTime(2012, 9, 1,10,10, 0, default_tz)
-        future = DateTime(2012, 9,20,10,10, 0, default_tz)
-        far =    DateTime(2012, 9,22,10,10, 0, default_tz)
-
-        setRoles(self.portal, TEST_USER_ID, ['Manager'])
-
-        self.portal.invokeFactory(
-            'Event',
-            'past',
-            title=u'Past event',
-            startDate=past,
-            endDate=past+0.1, # Zope DT
-            location=u'Vienna',
-            timezone=default_tz)
-
-        self.portal.invokeFactory(
-            'Event',
-            'now',
-            title=u'Now event',
-            startDate=now,
-            endDate=now+0.1,
-            location=u'Vienna',
-            recurrence='RRULE:FREQ=DAILY;COUNT=4;INTERVAL=4',
-            timezone=default_tz)
-
-        self.portal.invokeFactory(
-            'Event',
-            'future',
-            title=u'Future event',
-            startDate=future,
-            endDate=future+0.1,
-            location=u'Graz',
-            timezone=default_tz)
-
-        self.portal.invokeFactory('Folder', 'sub', title=u'sub')
-        self.portal.sub.invokeFactory(
-            'Event',
-            'long',
-            title=u'Long event',
-            startDate=past,
-            endDate=future,
-            location=u'Schaftal',
-            timezone=default_tz)
-
-        self.now = now
-        self.past = past
-        self.future = future
-        self.far = far
-
-        self.now_event = self.portal['now']
-        self.past_event = self.portal['past']
-        self.future_event = self.portal['future']
-        self.long_event = self.portal['sub']['long']
-
-
-    def test_get_portal_events(self):
-
-        # whole range
-        res = get_portal_events(self.portal)
-        self.assertTrue(len(res) == 4)
-
-        res = get_portal_events(self.portal,
-                                 range_start=self.past,
-                                 range_end=self.future)
-        self.assertTrue(len(res) == 4)
-
-        res = get_portal_events(self.portal,
-                                 range_end=self.future)
-        self.assertTrue(len(res) == 4)
-
-        res = get_portal_events(self.portal,
-                                 range_start=self.past)
-        self.assertTrue(len(res) == 4)
-
-
-        # only on now-date
-        res = get_portal_events(self.portal,
-                                 range_start=self.now,
-                                 range_end=self.now)
-        self.assertTrue(len(res) == 2)
-
-        # only on past date
-        res = get_portal_events(self.portal,
-                                 range_start=self.past,
-                                 range_end=self.past)
-        self.assertTrue(len(res) == 2)
-
-        # one recurrence occurrence in future
-        res = get_portal_events(self.portal,
-                                 range_start=self.far,
-                                 range_end=self.far)
-        self.assertTrue(len(res) == 1)
-
-        # from now on
-        res = get_portal_events(self.portal,
-                                 range_start=self.now)
-        self.assertTrue(len(res) == 3)
-
-        # until now
-        res = get_portal_events(self.portal,
-                                 range_end=self.now)
-        self.assertTrue(len(res) == 3)
-
-        # in subfolder
-        path = '/'.join(self.portal.sub.getPhysicalPath())
-        res = get_portal_events(self.portal, path=path)
-        self.assertTrue(len(res) == 1)
+    def make_dates(self):
+        def_tz = default_timezone()
+        now      = self.now      = DateTime(2012, 9,10,10,10, 0, def_tz)
+        past     = self.past     = DateTime(2012, 9, 1,10,10, 0, def_tz)
+        future   = self.future   = DateTime(2012, 9,20,10,10, 0, def_tz)
+        far      = self.far      = DateTime(2012, 9,22,10,10, 0, def_tz)
+        duration = self.duration = 0.1
+        return (now, past, future, far, duration)
 
 
 class TestDatesForDisplayAT(unittest.TestCase):
@@ -573,7 +476,7 @@ class TestDatesForDisplayAT(unittest.TestCase):
                  'same_day':   True,
                  'same_time':  False,
                  'whole_day':  False,
-                 'url': 'http://nohost/plone/event'
+                 'open_end':   False,
                 })
 
     def test_prep_display_wholeday_sameday(self):
@@ -587,14 +490,14 @@ class TestDatesForDisplayAT(unittest.TestCase):
         self.assertEqual(dates_for_display(event),
                 {'start_date': u'Oct 12, 2000',
                  'start_time': None,
-                 'start_iso':  u'2000-10-12T00:00:00+02:00',
+                 'start_iso':  u'2000-10-12',
                  'end_date':   u'Oct 12, 2000',
                  'end_time':   None,
-                 'end_iso':    u'2000-10-12T23:59:59+02:00',
+                 'end_iso':    u'2000-10-12',
                  'same_day':   True,
                  'same_time':  False,
                  'whole_day':  True,
-                 'url': 'http://nohost/plone/event'
+                 'open_end':   False
                 })
 
     def test_prep_display_wholeday_differentdays(self):
@@ -608,14 +511,14 @@ class TestDatesForDisplayAT(unittest.TestCase):
         self.assertEqual(dates_for_display(event),
                 {'start_date': u'Oct 12, 2000',
                  'start_time': None,
-                 'start_iso':  u'2000-10-12T00:00:00+02:00',
+                 'start_iso':  u'2000-10-12',
                  'end_date':   u'Oct 13, 2000',
                  'end_time':   None,
-                 'end_iso':    u'2000-10-13T23:59:59+02:00',
+                 'end_iso':    u'2000-10-13',
                  'same_day':   False,
                  'same_time':  False,
                  'whole_day':  True,
-                 'url': 'http://nohost/plone/event'
+                 'open_end':   False,
                 })
 
 
@@ -643,7 +546,7 @@ class TestDatesForDisplayDX(unittest.TestCase):
                  'same_day':   True,
                  'same_time':  False,
                  'whole_day':  False,
-                 'url': 'http://nohost/plone/event'
+                 'open_end':   False,
                 })
 
     def test_prep_display_wholeday_sameday(self):
@@ -657,14 +560,14 @@ class TestDatesForDisplayDX(unittest.TestCase):
         self.assertEqual(dates_for_display(event),
                 {'start_date': u'Oct 12, 2000',
                  'start_time': None,
-                 'start_iso':  u'2000-10-12T00:00:00+02:00',
+                 'start_iso':  u'2000-10-12',
                  'end_date':   u'Oct 12, 2000',
                  'end_time':   None,
-                 'end_iso':    u'2000-10-12T23:59:59+02:00',
+                 'end_iso':    u'2000-10-12',
                  'same_day':   True,
                  'same_time':  False,
                  'whole_day':  True,
-                 'url': 'http://nohost/plone/event'
+                 'open_end':   False,
                 })
 
     def test_prep_display_wholeday_differentdays(self):
@@ -678,12 +581,12 @@ class TestDatesForDisplayDX(unittest.TestCase):
         self.assertEqual(dates_for_display(event),
                 {'start_date': u'Oct 12, 2000',
                  'start_time': None,
-                 'start_iso':  u'2000-10-12T00:00:00+02:00',
+                 'start_iso':  u'2000-10-12',
                  'end_date':   u'Oct 13, 2000',
                  'end_time':   None,
-                 'end_iso':    u'2000-10-13T23:59:59+02:00',
+                 'end_iso':    u'2000-10-13',
                  'same_day':   False,
                  'same_time':  False,
                  'whole_day':  True,
-                 'url': 'http://nohost/plone/event'
+                 'open_end':   False,
                 })

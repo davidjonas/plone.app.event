@@ -1,6 +1,3 @@
-import itertools
-import pytz
-import unittest2 as unittest
 from DateTime import DateTime
 from Products.ATContentTypes.interfaces import IATEvent as IATEvent_ATCT
 from Products.ATContentTypes.tests.utils import EmailValidator
@@ -13,27 +10,29 @@ from Products.Archetypes.interfaces.layer import ILayerContainer
 from Products.CMFCore.permissions import ModifyPortalContent
 from Products.CMFCore.permissions import View
 from datetime import datetime
+from plone.app.event.at.content import default_end
+from plone.app.event.at.content import default_start
+from plone.app.event.at.interfaces import IATEvent
+from plone.app.event.at.interfaces import IATEventRecurrence
+from plone.app.event.base import default_timezone
+from plone.app.event.testing import PAEventAT_INTEGRATION_TESTING
+from plone.app.event.testing import set_env_timezone
 from plone.app.testing import TEST_USER_ID
 from plone.app.testing import setRoles
+from plone.event.interfaces import IEvent
+from plone.event.interfaces import IEventAccessor
+from plone.event.interfaces import IEventRecurrence
+from plone.event.utils import pydt
+from plone.formwidget.datetime.at import DatetimeWidget
+from plone.formwidget.recurrence.at.widget import RecurrenceValidator
+from plone.formwidget.recurrence.at.widget import RecurrenceWidget
 from zope.event import notify
 from zope.interface.verify import verifyObject
 from zope.lifecycleevent import ObjectModifiedEvent
 
-from plone.formwidget.datetime.at import DatetimeWidget
-from plone.formwidget.recurrence.at.widget import RecurrenceWidget
-from plone.formwidget.recurrence.at.widget import RecurrenceValidator
-
-from plone.app.event.at.interfaces import IATEvent, IATEventRecurrence
-from plone.app.event.base import (
-    default_start_DT,
-    default_end_DT,
-    default_timezone
-)
-from plone.app.event.testing import PAEventAT_INTEGRATION_TESTING
-from plone.app.event.testing import set_env_timezone
-from plone.event.interfaces import IEvent, IEventRecurrence
-from plone.event.interfaces import IEventAccessor
-from plone.event.utils import pydt
+import itertools
+import pytz
+import unittest2 as unittest
 
 
 TZNAME = "Europe/Vienna"
@@ -65,38 +64,97 @@ class PAEventAccessorTest(unittest.TestCase):
 
     def test_event_accessor(self):
         utc = pytz.utc
+        vienna = pytz.timezone('Europe/Vienna')
+
         self.portal.invokeFactory('Event', 'event1',
                 description='a description',
-                start=datetime(2011,11,11,11,0, tzinfo=utc),
-                end=datetime(2011,11,11,12,0, tzinfo=utc),
+                startDate=datetime(2011, 11, 11, 11, 0, tzinfo=utc),
+                endDate=datetime(2011, 11, 11, 12, 0, tzinfo=utc),
                 timezone='UTC',
                 wholeDay=False)
         e1 = self.portal['event1']
-
-        # setting attributes via the accessor
         acc = IEventAccessor(e1)
-        acc.end = datetime(2011,11,13,10,0, tzinfo=utc)
-        acc.timezone = 'Europe/Vienna'
 
-        vienna = pytz.timezone('Europe/Vienna')
+        # TEST DATES
+        self.assertEqual(acc.start, datetime(2011, 11, 11, 11, 0, tzinfo=utc))
+        self.assertEqual(acc.end, datetime(2011, 11, 11, 12, 0, tzinfo=utc))
 
-        # test description
+        acc.start = datetime(2011, 11, 13, 9, 0)  # tzinfo does not matter,
+        acc.end = datetime(2011, 11, 13, 10, 0)  # it's set by subscription
+                                                # adapter
+
+        # If using EventAccessor's edit method, calling notify isn't needed
+        acc.edit(timezone=u'Europe/Vienna')
+
+        # accessor should return start/end datetimes in the event's timezone
+        self.assertEqual(
+            acc.start,
+            datetime(2011, 11, 13, 9, 0, tzinfo=vienna))
+        self.assertEqual(
+            acc.end,
+            datetime(2011, 11, 13, 10, 0, tzinfo=vienna))
+
+        # start/end dates are stored in UTC zone on the context, but converted
+        # to event's timezone via the attribute getter.
+        self.assertEqual(
+            e1.end(),
+            DateTime('2011/11/13 10:00:00 Europe/Vienna')
+        )
+
+        # timezone should be the same on the event object and accessor
+        self.assertEqual(e1.getTimezone(), acc.timezone)
+
+        # Open End Test
+        acc.edit(open_end=True)
+        self.assertEqual(
+            acc.start,
+            datetime(2011, 11, 13, 9, 0, tzinfo=vienna))
+        self.assertEqual(
+            acc.end,
+            datetime(2011, 11, 13, 23, 59, 59, tzinfo=vienna))
+
+        # Whole Day Test
+        acc.edit(whole_day=True, open_end=False)
+        self.assertEqual(
+            acc.start,
+            datetime(2011, 11, 13, 0, 0, tzinfo=vienna))
+        self.assertEqual(
+            acc.end,
+            datetime(2011, 11, 13, 23, 59, 59, tzinfo=vienna))
+
+        # TEST DESCRIPTION
         self.assertTrue(acc.description == 'a description')
         acc.description = 'another desc'
         self.assertTrue(acc.description == 'another desc')
 
-        # accessor should return end datetime in the event's timezone
-        self.assertTrue(acc.end == datetime(2011,11,13,11,0, tzinfo=vienna))
+        # TEST OTHER PROPERTIES
+        acc.title = u"An Event"
+        acc.recurrence = u'RRULE:FREQ=DAILY;COUNT=5'
+        acc.location = u"Home"
+        acc.attendees = [u'me', u'you']
+        acc.contact_name = u"Max Mustermann"
+        acc.contact_email = u"test@test.com"
+        acc.contact_phone = u"+1234567890"
+        acc.event_url = u"http://plone.org/"
+        acc.subjects = [u"tag1", u"tag2"]
+        acc.text = u"body text with <b>html</b> formating."
 
-        # start/end dates are stored in UTC zone on the context, but converted
-        # to event's timezone via the attribute getter.
-        self.assertTrue(e1.end() ==
-                DateTime('2011/11/13 11:00:00 Europe/Vienna'))
+        # If not using EventAccessor's edit method, call notify manually
+        notify(ObjectModifiedEvent(acc.context))
 
-        # timezone should be the same on the event object and accessor
-        self.assertTrue(e1.getTimezone() == acc.timezone)
+        self.assertEqual(acc.recurrence, u'RRULE:FREQ=DAILY;COUNT=5')
+        self.assertEqual(acc.location, u'Home')
+        self.assertEqual(acc.attendees, (u'me', u'you'))
+        self.assertEqual(acc.contact_name, u"Max Mustermann")
+        self.assertEqual(acc.contact_email, u'test@test.com')
+        self.assertEqual(acc.contact_phone, u"+1234567890")
+        self.assertEqual(acc.event_url, u"http://plone.org/")
+        self.assertEqual(acc.subjects, (u"tag1", u"tag2"))
+        self.assertEqual(acc.text, u"body text with <b>html</b> formating.")
 
+        # CLEANUP
         self.portal.manage_delObjects(['event1'])
+
 
 class PAEventATTest(unittest.TestCase):
     layer = PAEventAT_INTEGRATION_TESTING
@@ -256,6 +314,38 @@ class PAEventATTest(unittest.TestCase):
         self.assertTrue(acc.end == dt_2_2)
 
         self.portal.manage_delObjects(['ate1'])
+
+
+class PAEventCMFEditTest(unittest.TestCase):
+    layer = PAEventAT_INTEGRATION_TESTING
+
+    def setUp(self):
+        portal = self.layer['portal']
+        self.portal = portal
+        setRoles(portal, TEST_USER_ID, ['Manager'])
+        set_env_timezone(TZNAME)
+
+    def testEventCreate(self):
+        self.portal.invokeFactory('Event', id='event',
+                                  title='Foo',
+                                  start_date='2003-09-18',
+                                  end_date='2003-09-19')
+        self.assertEqual(self.portal.event.Title(), 'Foo')
+        self.assertTrue(self.portal.event.start().ISO8601() \
+                            .startswith('2003-09-18T00:00:00'))
+        self.assertTrue(self.portal.event.end().ISO8601() \
+                            .startswith('2003-09-19T00:00:00'))
+
+    def testEventEdit(self):
+        self.portal.invokeFactory('Event', id='event')
+        self.portal.event.event_edit(title='Foo',
+                                     start_date='2003-09-18',
+                                     end_date='2003-09-19')
+        self.assertEqual(self.portal.event.Title(), 'Foo')
+        self.assertTrue(self.portal.event.start().ISO8601() \
+                            .startswith('2003-09-18T00:00:00'))
+        self.assertTrue(self.portal.event.end().ISO8601() \
+                            .startswith('2003-09-19T00:00:00'))
 
 
 class PAEventATFieldTest(unittest.TestCase):
@@ -431,7 +521,7 @@ class PAEventATFieldTest(unittest.TestCase):
         self.assertTrue(ILayerContainer.providedBy(field))
         self.assertTrue(field.required == 1, 'Value is %s' % field.required)
         self.assertTrue(field.default == None, 'Value is %s' % str(field.default))
-        self.assertTrue(field.default_method == default_end_DT,
+        self.assertTrue(field.default_method == default_end,
                         'Value is %s' % str(field.default_method))
         self.assertTrue(field.searchable == False, 'Value is %s' % field.searchable)
         self.assertTrue(field.vocabulary == (),
@@ -597,7 +687,7 @@ class PAEventATFieldTest(unittest.TestCase):
         self.assertTrue(ILayerContainer.providedBy(field))
         self.assertTrue(field.required == 1, 'Value is %s' % field.required)
         self.assertTrue(field.default == None , 'Value is %s' % str(field.default))
-        self.assertTrue(field.default_method == default_start_DT , 'Value is %s' % str(field.default_method))
+        self.assertTrue(field.default_method == default_start , 'Value is %s' % str(field.default_method))
         self.assertTrue(field.searchable == False, 'Value is %s' % field.searchable)
         self.assertTrue(field.vocabulary == (),
                         'Value is %s' % str(field.vocabulary))
@@ -794,6 +884,58 @@ class PAEventATFieldTest(unittest.TestCase):
                         'Value is %s' % type(vocab))
         self.assertTrue(tuple(vocab) == ('True', 'False'), 'Value is %s' % str(tuple(vocab)))
 
+    def test_openEndField(self):
+        field = self.obj.getField('openEnd')
+
+        self.assertTrue(ILayerContainer.providedBy(field))
+        self.assertTrue(field.required == 0, 'Value is %s' % field.required)
+        self.assertTrue(field.default == False, 'Value is %s' % str(field.default))
+        self.assertTrue(field.searchable == 0, 'Value is %s' % field.searchable)
+        self.assertTrue(field.vocabulary == (('True', 'Yes', 'yes'), ('False', 'No', 'no')),
+                        'Value is %s' % str(field.vocabulary))
+        self.assertTrue(field.enforceVocabulary == 0,
+                        'Value is %s' % field.enforceVocabulary)
+        self.assertTrue(field.multiValued == 0,
+                        'Value is %s' % field.multiValued)
+        self.assertTrue(field.isMetadata == 0, 'Value is %s' % field.isMetadata)
+        self.assertTrue(field.accessor == 'getOpenEnd',
+                        'Value is %s' % field.accessor)
+        self.assertTrue(field.mutator == 'setOpenEnd',
+                        'Value is %s' % field.mutator)
+        self.assertTrue(field.read_permission == View,
+                        'Value is %s' % field.read_permission)
+        self.assertTrue(field.write_permission == ModifyPortalContent,
+                        'Value is %s' % field.write_permission)
+        self.assertTrue(field.generateMode == 'veVc',
+                        'Value is %s' % field.generateMode)
+        self.assertTrue(field.force == '', 'Value is %s' % field.force)
+        self.assertTrue(field.type == 'boolean', 'Value is %s' % field.type)
+        self.assertTrue(isinstance(field.storage, atapi.AttributeStorage),
+                        'Value is %s' % type(field.storage))
+        self.assertTrue(field.getLayerImpl('storage') == atapi.AttributeStorage(),
+                        'Value is %s' % field.getLayerImpl('storage'))
+        self.assertEqual(field.validators, EmptyValidator)
+        self.assertTrue(isinstance(field.widget, atapi.BooleanWidget),
+                        'Value is %s' % id(field.widget))
+        vocab = field.Vocabulary(self.obj)
+        self.assertTrue(isinstance(vocab, atapi.DisplayList),
+                        'Value is %s' % type(vocab))
+        self.assertTrue(tuple(vocab) == ('True', 'False'), 'Value is %s' % str(tuple(vocab)))
+
+    def test_openEnd_handler(self):
+        event_id = self.portal.invokeFactory('Event',
+                id="event",
+                startDate='2000/10/12 06:00:00',
+                endDate='2000/10/14 18:00:00',
+                timezone=TZNAME,
+                openEnd=True)
+        event = self.portal[event_id]
+        self.assertTrue(event.getOpenEnd())
+        self.assertEqual(event.start().Time(), '06:00:00')
+        self.assertEqual(event.end().Date(), '2000/10/12')
+        self.assertEqual(event.end().Time(), '23:59:59')
+
+        self.portal.manage_delObjects(['event'])
 
     def test_wholeday_handler(self):
         event_id = self.portal.invokeFactory('Event',

@@ -1,11 +1,21 @@
-from setuptools import setup, find_packages
+from setuptools import setup
+from setuptools import find_packages
+
+import os
+
 
 version = '1.0dev'
+
 
 setup(name='plone.app.event',
       version=version,
       description="The Plone calendar framework",
-      long_description=open("README.rst").read() + "\n" +
+      long_description=open("README.rst").read()
+                       + "\n" +
+                       open(os.path.join('docs', 'installation.rst')).read()
+                       + "\n" +
+                       open(os.path.join('docs', 'contributors.rst')).read()
+                       + '\n' +
                        open("CHANGES.rst").read(),
       # Get more strings from http://pypi.python.org/pypi?%3Aaction=list_classifiers
       classifiers=[
@@ -31,6 +41,7 @@ setup(name='plone.app.event',
           'Products.DateRecurringIndex',
           'Products.GenericSetup',
           'Products.ZCatalog',
+          'Products.statusmessages',
           'Zope2',
           'collective.elephantvocabulary',
           'icalendar',
@@ -41,14 +52,20 @@ setup(name='plone.app.event',
           'plone.event',
           'plone.formwidget.datetime',
           'plone.formwidget.recurrence',
+          'plone.formwidget.namedfile',
           'plone.memoize',
+          'plone.namedfile',
           'plone.portlets',
           'plone.registry',
           'plone.uuid',
           'plone.z3cform',
           'pytz',
+          'transaction',
+          'z3c.form',
           'zope.component',
+          'zope.container',
           'zope.contentprovider',
+          'zope.deprecation',
           'zope.formlib',
           'zope.i18nmessageid',
           'zope.interface',
@@ -64,7 +81,6 @@ setup(name='plone.app.event',
               'Products.contentmigration',
               'plone.formwidget.datetime [archetypes]',
               'plone.formwidget.recurrence [archetypes]',
-              'transaction',
           ],
           'dexterity': [
               'plone.app.dexterity',
@@ -76,13 +92,15 @@ setup(name='plone.app.event',
               'plone.formwidget.recurrence [z3cform]',
               'plone.indexer',
               'plone.supermodel',
-              'z3c.form',
           ],
           'ploneintegration': [
               'plone.app.event [archetypes]',
               'z3c.unconfigure',
           ],
           'test': [
+              'mock',
+              'plone.app.event [archetypes, dexterity]',
+              'plone.app.collection',
               'plone.app.testing',
               'plone.testing',
               'transaction',

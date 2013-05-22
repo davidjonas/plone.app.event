@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-import unittest2 as unittest
 from DateTime import DateTime
 from Products.CMFCore.utils import getToolByName
 from Products.GenericSetup.utils import _getDottedName
+from calendar import monthrange
+from plone.app.event.base import localized_today
+from plone.app.event.portlets import portlet_calendar
+from plone.app.event.testing import PAEventAT_INTEGRATION_TESTING
+from plone.app.event.testing import PAEvent_INTEGRATION_TESTING
 from plone.app.testing import TEST_USER_ID
 from plone.app.testing import setRoles
 from plone.portlets.interfaces import IPortletAssignment
@@ -10,13 +14,12 @@ from plone.portlets.interfaces import IPortletDataProvider
 from plone.portlets.interfaces import IPortletManager
 from plone.portlets.interfaces import IPortletRenderer
 from plone.portlets.interfaces import IPortletType
-from zope.component import getUtility, getMultiAdapter
-from zope.component.hooks import setHooks, setSite
+from zope.component import getUtility
+from zope.component import getMultiAdapter
+from zope.component.hooks import setHooks
+from zope.component.hooks import setSite
 
-from plone.app.event.base import localized_today
-from plone.app.event.portlets import portlet_calendar
-from plone.app.event.testing import PAEventAT_INTEGRATION_TESTING
-from plone.app.event.testing import PAEvent_INTEGRATION_TESTING
+import unittest2 as unittest
 
 
 class PortletTest(unittest.TestCase):
@@ -144,16 +147,17 @@ class RendererTest(unittest.TestCase):
         portlet.update()
         html = portlet.render()
 
-        # Now let's add a new event in the last day of the current month
+        # Now let's add a new event on the first day of the current month
         year, month = portlet.year_month_display()
-        last_day_month = DateTime('%s/%s/1' % (year, month)) - 1
+        day = monthrange(year, month)[1] # (wkday, days)
+        last_day_month = DateTime('%s/%s/%s' % (year, month, day))
         hour = 1 / 24.0
         # Event starts at 23:00 and ends at 23:30
         self.portal.invokeFactory('Event', 'e1',
                                   startDate=last_day_month + 23*hour,
                                   endDate=last_day_month + 23.5*hour)
 
-        # Try to render the calendar portlet again, it must be different now
+        # Try to render the calendar portlet again, it must be different Now
         portlet = self.renderer(assignment=portlet_calendar.Assignment())
         portlet.update()
         self.assertNotEqual(html, portlet.render(), "Cache key wasn't invalidated")
