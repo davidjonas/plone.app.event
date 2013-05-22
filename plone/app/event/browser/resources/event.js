@@ -2,13 +2,6 @@
 
     var end_start_delta;
 
-    function wholeDayHandler(e) {
-        if (e.target.checked) {
-            $('.datetimewidget-time').fadeOut();
-        } else {
-            $('.datetimewidget-time').fadeIn();
-        }
-    }
 
     function updateEndDate() {
         var start_date = $('#startDate').data('dateinput').getValue();
@@ -44,6 +37,9 @@
         }
     }
 
+
+    // TODO: fix above
+    
     function initDelta(e) {
         var start_datetime = getDateTime('#archetypes-fieldname-startDate');
         var end_datetime = getDateTime('#archetypes-fieldname-endDate');
@@ -51,10 +47,48 @@
         end_start_delta = (end_datetime - start_datetime) / 1000 / (3600 * 24);
     }
 
+
+    function show_hide_widget(widget, hide, fade) {
+        if (hide===true) {
+            if (fade===true) { widget.fadeOut(); }
+            else { widget.hide(); }
+        } else {
+            if (fade===true) { widget.fadeIn(); }
+            else { widget.show(); }
+        }
+    }
+
+    function a_or_b(a, b) {
+        var ret = undefined;
+        if (a.length>0) {
+            ret = a;
+        } else {
+            ret = b;
+        }
+        return ret;
+    }
+
     $(document).ready(function() {
 
         // EDIT FORM
-        $('#wholeDay').bind('change', wholeDayHandler);
+
+        // WHOLE DAY INIT
+        var jq_whole_day = a_or_b($('#event-base-edit input#wholeDay'), $('#formfield-form-widgets-IEventBasic-whole_day input'));
+        var jq_datetime = $('.datetimewidget-time'); 
+        if (jq_whole_day.length>0) {
+            jq_whole_day.bind('change', function (e) { show_hide_widget(jq_datetime, e.target.checked, true)});
+            show_hide_widget(jq_datetime, jq_whole_day.get(0).checked, fade=false);
+        }
+
+        // OPEN END INIT
+        var jq_open_end = a_or_b($('#event-base-edit input#openEnd'), $('#formfield-form-widgets-IEventBasic-open_end input'));
+        var jq_end_date = a_or_b($('#archetypes-fieldname-endDate'), $('#formfield-form-widgets-IEventBasic-end'));
+        if (jq_open_end.length>0) {
+            jq_open_end.bind('change', function (e) { show_hide_widget(jq_end_date, e.target.checked, true)});
+            show_hide_widget(jq_end_date, jq_open_end.get(0).checked, fade=false);
+        }
+
+
         /*$('[id^=startDate]').bind('focus', initDelta);
         $('[id^=endDate]').bind('focus', initDelta);
         $('#startDate').each(function(){
@@ -79,12 +113,12 @@
         var event_listing_calendar = $("#event_listing_calendar");
         if ($().dateinput && event_listing_calendar.length > 0) {
 
-            function get_req_param(name){
+            get_req_param = function (name){
                 // http://stackoverflow.com/questions/831030/how-to-get-get-request-parameters-in-javascript
-                if(name=(new RegExp('[?&]'+encodeURIComponent(name)+'=([^&]*)')).exec(location.search)) {
+                if(name===(new RegExp('[?&]'+encodeURIComponent(name)+'=([^&]*)')).exec(location.search)) {
                     return decodeURIComponent(name[1]);
                 }
-            }
+            };
 
             // Preselect current date, if exists
             var val = get_req_param('date');

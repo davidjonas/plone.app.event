@@ -1,10 +1,9 @@
 *.egg-info
+*.mo
 *.py?
 *.sw?
 *.wpr
-*.mo
 .*
-
 !.gitignore
 bin/
 dev/

@@ -1,20 +1,29 @@
+from Products.CMFPlone.PloneBatch import Batch
+from Products.Five.browser import BrowserView
 from calendar import monthrange
 from datetime import date
 from datetime import timedelta
-
-from Products.CMFPlone.PloneBatch import Batch
-from Products.Five.browser import BrowserView
-from zope.component import getMultiAdapter
-from zope.contentprovider.interfaces import IContentProvider
-
+from plone.app.event import messageFactory as _
 from plone.app.event.base import date_speller
-from plone.app.event.base import get_occurrences_from_brains
-from plone.app.event.base import get_portal_events
-from plone.app.event.base import start_end_from_mode
+from plone.app.event.base import get_events
 from plone.app.event.base import guess_date_from
 from plone.app.event.base import localized_now
+from plone.app.event.base import start_end_from_mode
+from plone.app.event.ical.exporter import construct_icalendar
+from plone.app.layout.navigation.defaultpage import getDefaultPage
+from plone.event.interfaces import IEventAccessor
+from plone.memoize import view
+from zope.component import getMultiAdapter
+from zope.contentprovider.interfaces import IContentProvider
+try:
+    from plone.app.collection.interfaces import ICollection
+except ImportError:
+    ICollection = None
+try:
+    from Products.ATContentTypes.interfaces import IATTopic
+except ImportError:
+    IATTopic = None
 
-from plone.app.event import messageFactory as _
 
 class EventListing(BrowserView):
 
@@ -24,7 +33,7 @@ class EventListing(BrowserView):
         self.now = now = localized_now(context)
 
         # Batch parameter
-        req = self.request
+        req = self.request.form
         self.b_start = 'b_start' in req and int(req['b_start']) or 0
         self.b_size  = 'b_size'  in req and int(req['b_size'])  or 10
         self.orphan  = 'orphan'  in req and int(req['orphan'])  or 1
@@ -45,6 +54,25 @@ class EventListing(BrowserView):
             self.mode = self._date and 'day' or 'future'
 
     @property
+    def default_context(self):
+        # Try to get the default page
+        context = self.context
+        default = getDefaultPage(context)
+        if default:
+            context = context[default]
+        return context
+
+    @property
+    def is_collection(self):
+        ctx = self.default_context
+        return ICollection and ICollection.providedBy(ctx) or False
+
+    @property
+    def is_topic(self):
+        ctx = self.default_context
+        return IATTopic and IATTopic.providedBy(ctx) or False
+
+    @property
     def date(self):
         dt = None
         if self._date:
@@ -59,25 +87,64 @@ class EventListing(BrowserView):
         start, end = start_end_from_mode(self.mode, self.date, self.context)
         return start, end
 
-    @property
-    def get_events(self):
+    @view.memoize
+    def _get_events(self, ret_mode=3):
         context = self.context
         kw = {}
         if not self._all:
             kw['path'] = '/'.join(context.getPhysicalPath())
-
-        b_start = self.b_start
-        b_size  = self.b_size
         #kw['b_start'] = self.b_start
         #kw['b_size']  = self.b_size
 
         start, end = self._start_end
-        occs = get_occurrences_from_brains(
-                context,
-                get_portal_events(context, start, end, **kw),
-                start, end)
+        return get_events(context, start=start, end=end,
+                          ret_mode=ret_mode, expand=True, **kw)
 
-        return Batch(occs, size=b_size, start=b_start, orphan=self.orphan)
+    def events(self, ret_mode=3, batch=True):
+        res = []
+        is_col = self.is_collection
+        is_top = self.is_topic
+        if is_col or is_top:
+            ctx = self.default_context
+            if is_col:
+                res = ctx.results(batch=False, sort_on='start', brains=False)
+            else:
+                res = ctx.queryCatalog(
+                    REQUEST=self.request, batch=False, full_objects=True
+                )
+            # TODO: uff, we have to walk through all results...
+            if ret_mode == 3:
+                res = [IEventAccessor(obj) for obj in res]
+        else:
+            res = self._get_events(ret_mode)
+        if batch:
+            b_start = self.b_start
+            b_size  = self.b_size
+            res = Batch(res, size=b_size, start=b_start, orphan=self.orphan)
+        return res
+
+    @property
+    def ical(self):
+        events = self.events(ret_mode=2, batch=False)  # get as objects
+        cal = construct_icalendar(self.context, events)
+        name = '%s.ics' % self.context.getId()
+        self.request.RESPONSE.setHeader('Content-Type', 'text/calendar')
+        self.request.RESPONSE.setHeader('Content-Disposition',
+            'attachment; filename="%s"' % name)
+        self.request.RESPONSE.write(cal.to_ical())
+
+    @property
+    def ical_url(self):
+        date = self.date
+        mode = self.mode
+        qstr = (date or mode) and '?%s%s%s' %\
+                (mode and 'mode=%s' % mode,
+                 mode and date and '&' or '',
+                 date and 'date=%s' % date or '') or ''
+        return '%s/@@event_listing_ical%s' % (
+            self.context.absolute_url(),
+            qstr
+        )
 
     def formated_date(self, occ):
         provider = getMultiAdapter((self.context, self.request, self),
@@ -94,24 +161,28 @@ class EventListing(BrowserView):
         end_dict = end and date_speller(self.context, end) or None
 
         mode = self.mode
+        main_msgid = None
+        sub_msgid = None
         if mode == 'all':
-            msgid = _(u"all_events", default=u"All events")
+            main_msgid = _(u"all_events", default=u"All events")
 
         elif mode == 'past':
-            msgid = _(u"past_events", default=u"Past events")
+            main_msgid = _(u"past_events", default=u"Past events")
 
         elif mode == 'future':
-            msgid = _(u"future_events", default=u"Future events")
+            main_msgid = _(u"future_events", default=u"Future events")
 
         elif mode == 'now':
-            msgid = _(u"todays_upcoming_events", default=u"Todays upcoming events")
+            main_msgid = _(u"todays_upcoming_events",
+                           default=u"Todays upcoming events")
 
         elif mode == 'today':
-            msgid = _(u"todays_events", default=u"Todays events")
+            main_msgid = _(u"todays_events", default=u"Todays events")
 
         elif mode == '7days':
-            msgid = _(u"events_from_until",
-                      default=u"Events from ${from} until ${until}",
+            main_msgid = _(u"7days_events", default=u"Events in next 7 days.")
+            sub_msgid = _(u"events_from_until",
+                      default=u"${from} until ${until}.",
                       mapping={
                           'from': "%s, %s. %s %s" % (
                                 start_dict['wkday'],
@@ -127,7 +198,7 @@ class EventListing(BrowserView):
                     )
 
         elif mode == 'day':
-            msgid = _(u"events_on_day",
+            main_msgid = _(u"events_on_day",
                       default=u"Events on ${day}",
                       mapping={
                           'day': "%s, %s. %s %s" % (
@@ -139,11 +210,12 @@ class EventListing(BrowserView):
                     )
 
         elif mode == 'week':
-            msgid = _(u"events_in_week",
-                      default=u"Events in week ${weeknumber}"
-                              u" from ${from} until ${until}",
+            main_msgid = _(u"events_in_week",
+                           default=u"Events in week ${weeknumber}",
+                           mapping={'weeknumber': start.isocalendar()[1]})
+            sub_msgid = _(u"events_from_until",
+                      default=u"${from} until ${until}.",
                       mapping={
-                          'weeknumber': start.isocalendar()[1],
                           'from': "%s, %s. %s %s" % (
                                 start_dict['wkday'],
                                 start.day,
@@ -158,7 +230,7 @@ class EventListing(BrowserView):
                     )
 
         elif mode == 'month':
-            msgid = _(u"events_in_month",
+            main_msgid = _(u"events_in_month",
                       default=u"Events in ${month} ${year}",
                       mapping={
                           'month': start_dict['month'],
@@ -166,16 +238,20 @@ class EventListing(BrowserView):
                         }
                     )
 
-        return self.context.translate(msgid)
-
+        trans = self.context.translate
+        return {'main': main_msgid and trans(main_msgid) or '',
+                'sub': sub_msgid and trans(sub_msgid) or ''}
 
     # MODE URLs
     def _date_nav_url(self, mode, datestr=''):
-        return '%s/%s?mode=%s%s' % (
-                self.context.absolute_url(),
-                self.__name__,
+        return '%s?mode=%s%s' % (
+                self.request.getURL(),
                 mode,
                 datestr and '&date=%s' % datestr or '')
+
+    @property
+    def mode_all_url(self):
+        return self._date_nav_url('all')
 
     @property
     def mode_day_url(self):
@@ -192,7 +268,6 @@ class EventListing(BrowserView):
         now = self.date or self.now
         return self._date_nav_url('month', now.date().isoformat())
 
-
     # DAY NAV
     @property
     def next_day_url(self):
@@ -203,7 +278,6 @@ class EventListing(BrowserView):
     @property
     def today_url(self):
         return self._date_nav_url('day')
-
 
     @property
     def prev_day_url(self):
@@ -232,7 +306,7 @@ class EventListing(BrowserView):
     @property
     def next_month_url(self):
         now = self.date or self.now
-        last_day = monthrange(now.year, now.month)[1] # (wkday, days)
+        last_day = monthrange(now.year, now.month)[1]  # (wkday, days)
         datestr = (now.replace(day=last_day) +
                    timedelta(days=1)).date().isoformat()
         return self._date_nav_url('month', datestr)
@@ -246,3 +320,9 @@ class EventListing(BrowserView):
         now = self.date or self.now
         datestr = (now.replace(day=1) - timedelta(days=1)).date().isoformat()
         return self._date_nav_url('month', datestr)
+
+
+class EventListingIcal(EventListing):
+
+    def __call__(self, *args, **kwargs):
+        return self.ical

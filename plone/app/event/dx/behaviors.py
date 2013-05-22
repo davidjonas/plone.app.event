@@ -2,44 +2,53 @@
 types.
 
 """
-from datetime import tzinfo, timedelta
+from Products.CMFCore.utils import getToolByName
+from Products.CMFPlone.utils import safe_unicode
+from datetime import timedelta
+from datetime import tzinfo
 from plone.app.dexterity.behaviors.metadata import ICategorization
+from plone.app.event import messageFactory as _
+from plone.app.event.base import DT
+from plone.app.event.base import default_end as default_end_dt
+from plone.app.event.base import default_start as default_start_dt
+from plone.app.event.base import default_timezone
+from plone.app.event.base import dt_end_of_day
+from plone.app.event.base import dt_start_of_day
+from plone.app.event.base import first_weekday
+from plone.app.event.base import wkday_to_mon1
+from plone.app.event.dx import ParameterizedWidgetFactory
+from plone.app.event.dx.interfaces import IDXEvent
 from plone.app.textfield import RichText
 from plone.app.textfield.value import RichTextValue
+from plone.autoform import directives as form
+from plone.autoform.interfaces import IFormFieldProvider
 from plone.event.interfaces import IEventAccessor
 from plone.event.utils import tzdel, utc, dt_to_zone
 from plone.formwidget.datetime.z3cform.widget import DatetimeWidget
 from plone.formwidget.recurrence.z3cform.widget import RecurrenceWidget
 from plone.indexer import indexer
+from plone.supermodel import model
 from plone.uuid.interfaces import IUUID
-from Products.CMFCore.utils import getToolByName
-import pytz
+from z3c.form.widget import ComputedWidgetAttribute
 from zope import schema
 from zope.component import adapts
+from zope.component import provideAdapter
+from zope.event import notify
 from zope.interface import alsoProvides
 from zope.interface import implements
-from zope.interface import invariant, Invalid
+from zope.interface import invariant
+from zope.interface import Invalid
+from zope.lifecycleevent import ObjectModifiedEvent
 
-from plone.app.event import messageFactory as _
-from plone.app.event.base import default_timezone
-from plone.app.event.base import default_end_dt
-from plone.app.event.base import localized_now, DT
-from plone.app.event.base import dt_start_of_day
-from plone.app.event.base import dt_end_of_day
-from plone.app.event.base import first_weekday_sun0
-from plone.app.event.dx.interfaces import IDXEvent
-from plone.app.event.dx import ParameterizedWidgetFactory
-
-from plone.autoform import directives as form
-from plone.autoform.interfaces import IFormFieldProvider
-from plone.supermodel import model
-
-from zope.component import provideAdapter
-from z3c.form.widget import ComputedWidgetAttribute
+import pytz
 
 
 # TODO: altern., for backwards compat., we could import from plone.z3cform
 from z3c.form.browser.textlines import TextLinesFieldWidget
+
+
+def first_weekday_sun0():
+    return wkday_to_mon1(first_weekday())
 
 
 class StartBeforeEnd(Invalid):
@@ -71,6 +80,12 @@ class IEventBasic(model.Schema):
         required = False
         )
 
+    open_end = schema.Bool(
+        title = _(u'label_open_end', default=u'Open end event'),
+        description=_(u'help_open_end', default=u"This event is open ended."),
+        required = False
+        )
+
     timezone = schema.Choice(
         title = _(u'label_timezone', default=u'Timezone'),
         description = _(u'help_timezone', default=u'Timezone of the event'),
@@ -95,12 +110,12 @@ IEventBasic.setTaggedValue('plone.autoform.widgets',
     })
 
 def default_start(data):
-    return localized_now()
+    return default_start_dt(data.context)
 provideAdapter(ComputedWidgetAttribute(
     default_start, field=IEventBasic['start']), name='default')
 
 def default_end(data):
-    return default_end_dt()
+    return default_end_dt(data.context)
 provideAdapter(ComputedWidgetAttribute(
     default_end, field=IEventBasic['end']), name='default')
 
@@ -269,6 +284,13 @@ class EventBasic(object):
         self.context.whole_day = value
 
     @property
+    def open_end(self):
+        return getattr(self.context, 'open_end', False)
+    @open_end.setter
+    def open_end(self, value):
+        self.context.open_end = value
+
+    @property
     def duration(self):
         return self.context.end - self.context.start
 
@@ -282,7 +304,9 @@ class EventBasic(object):
         # form, we have to save it with a fake zone first and replace it with
         # the target zone afterwards. So, it's not timezone naive and can be
         # compared to timezone aware Dates.
-        return dt.replace(tzinfo=FakeZone()) # return with fake zone
+
+        # return with fake zone and without microseconds
+        return dt.replace(microsecond=0, tzinfo=FakeZone())
 
 
 class EventRecurrence(object):
@@ -301,9 +325,15 @@ class EventRecurrence(object):
 ## Event handlers
 
 def data_postprocessing(obj, event):
+
+    # newly created object, without start/end/timezone (e.g. invokeFactory()
+    # called without data from add form), ignore event; it will be notified
+    # again later:
+    if getattr(obj, 'start', None) is None:
+        return
+
     # We handle date inputs as floating dates without timezones and apply
     # timezones afterwards.
-
     def _fix_zone(dt, zone):
 
         if dt.tzinfo is not None and isinstance(dt.tzinfo, FakeZone):
@@ -326,7 +356,7 @@ def data_postprocessing(obj, event):
             # the target timezone.
             dt = dt.astimezone(tz)
 
-        return dt
+        return dt.replace(microsecond=0)
 
     behavior = IEventBasic(obj)
     tz = pytz.timezone(behavior.timezone)
@@ -338,6 +368,9 @@ def data_postprocessing(obj, event):
     # Adapt for whole day
     if behavior.whole_day:
         start = dt_start_of_day(start)
+    if behavior.open_end:
+        end = start  # Open end events end on same day
+    if behavior.open_end or behavior.whole_day:
         end = dt_end_of_day(end)
 
     # Save back
@@ -398,6 +431,32 @@ class EventAccessor(object):
 
     implements(IEventAccessor)
     adapts(IDXEvent)
+    event_type = 'plone.app.event.dx.event' # If you use a custom content-type,
+                                            # override this.
+
+    # Unified create method via Accessor
+    @classmethod
+    def create(cls, container, content_id, title, description=None,
+               start=None, end=None, timezone=None,
+               whole_day=None, open_end=None, **kwargs):
+        container.invokeFactory(cls.event_type,
+                                id=content_id,
+                                title=title,
+                                description=description,
+                                start=start,
+                                end=end,
+                                whole_day=whole_day,
+                                open_end=open_end,
+                                timezone=timezone)
+        content = container[content_id]
+        acc = IEventAccessor(content)
+        acc.edit(**kwargs)
+        return acc
+
+    def edit(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        notify(ObjectModifiedEvent(self.context))
 
     def __init__(self, context):
         object.__setattr__(self, 'context', context)
@@ -406,6 +465,7 @@ class EventAccessor(object):
             start=IEventBasic,
             end=IEventBasic,
             whole_day=IEventBasic,
+            open_end=IEventBasic,
             timezone=IEventBasic,
             recurrence=IEventRecurrence,
             location=IEventLocation,
@@ -423,14 +483,14 @@ class EventAccessor(object):
         bm = self._behavior_map
         if name in bm: # adapt object with behavior and return the attribute
            behavior = bm[name](self.context, None)
-           if behavior: return getattr(behavior, name, None)
+           if behavior: return safe_unicode(getattr(behavior, name, None))
         return None
 
     def __setattr__(self, name, value):
         bm = self._behavior_map
         if name in bm: # set the attributes on behaviors
             behavior = bm[name](self.context, None)
-            if behavior: setattr(behavior, name, value)
+            if behavior: setattr(behavior, name, safe_unicode(value))
 
     def __delattr__(self, name):
         bm = self._behavior_map
@@ -447,7 +507,7 @@ class EventAccessor(object):
 
     @property
     def url(self):
-        return self.context.absolute_url()
+        return safe_unicode(self.context.absolute_url())
 
     @property
     def created(self):
@@ -464,17 +524,17 @@ class EventAccessor(object):
     # rw properties not in behaviors (yet) # TODO revisit
     @property
     def title(self):
-        return getattr(self.context, 'title', None)
+        return safe_unicode(getattr(self.context, 'title', None))
     @title.setter
     def title(self, value):
-        setattr(self.context, 'title', value)
+        setattr(self.context, 'title', safe_unicode(value))
 
     @property
     def description(self):
-        return getattr(self.context, 'description', None)
+        return safe_unicode(getattr(self.context, 'description', None))
     @description.setter
     def description(self, value):
-        setattr(self.context, 'description', value)
+        setattr(self.context, 'description', safe_unicode(value))
 
     @property
     def text(self):
@@ -482,8 +542,8 @@ class EventAccessor(object):
         textvalue = getattr(behavior, 'text', None)
         if textvalue is None:
             return u''
-        return textvalue.output
+        return safe_unicode(textvalue.output)
     @text.setter
     def text(self, value):
         behavior = IEventSummary(self.context)
-        behavior.text = RichTextValue(raw=value)
+        behavior.text = RichTextValue(raw=safe_unicode(value))

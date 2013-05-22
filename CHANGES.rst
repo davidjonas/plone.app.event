@@ -4,6 +4,160 @@ Changelog
 1.0dev (unreleased)
 -------------------
 
+- Add open_end option for Dexterity behaviors and Archetypes type.
+  [thet]
+
+- For whole_day events, let dates_for_display return the iso-date
+  representation from date and not datetime instances.
+  [thet]
+
+- Remove support of microseconds and default to a resolution of one second for
+  all datetime getter/setter and conversions. Microseconds exactness is not
+  needed and dateutil does not support microseconds which results in unexpected
+  results in comparisons.
+  [thet]
+
+- Changing the timezone in events is a corner case, so the timezone field is
+  moved to the "dates" schemata an ATEvent.
+  [thet]
+
+- Remove font-weight bold for monthdays and font-weight normal for table header
+  in portlet calendar. Set div.portletCalendar with to auto instead of
+  unnecessary 100% + margin. Align with plonetheme.sunburst.
+  [thet]
+
+- Let the IRecurrenceSupport adapter return the event itself, when the event
+  starts before and ends after a given range_start. Fixes a case, where
+  get_events didn't return a long lasting event for a given timeframe with
+  expand set to True.
+  [thet]
+
+- Let the @@event_listing view work on IATTopic and ICollection contexts.
+  [thet]
+
+- In event_view, handle the case that the location field is not of type
+  basestring but a reference to another object, for example provided by
+  collective.venue.
+  [thet]
+
+- Use plone.app.event's MessageFactory for ATEvent.
+  [thet]
+
+- Let EventAccessor for Archetypes based content type return it's values from
+  property accessors instead properties directly. This let's return the correct
+  value when an property get's overridden by archetypes.schemaextender.
+  [thet]
+
+- Deprecate upgrade_step_2 to plone.app.event beta 2, which is likely not
+  necessary for any existing plone.app.event installation out there.
+  [thet]
+
+- For the Archetypes based ATEvent migration step, do a transaction.commit()
+  before each migration to commit previous changes. This avoids running out of
+  space for large migrations.
+  [thet]
+
+- Let IEventAccessor adapters set/get all basestring values in unicode.
+  [thet]
+
+- Add and install plone.app.collection in test environment, as we cannot assume
+  that it's installed.
+  [thet]
+
+- Re-Add cmf_edit method for ATEvent to ensure better backwards compatibility.
+  Move related cmf_edit tests from Products.CMFPlone to plone.app.event.
+  [thet]
+
+- Add Event profile definition for ATEvent completly in order to remove it from
+  Products.CMFPlone. ATEvent is installed by ATContentTypes automatically as
+  part of upcoming plone.app.contenttypes merge.
+  [thet]
+
+- Optimize css by using common classes for event_listing and event_view.
+  [thet]
+
+- Add schema.org and hCalendar microdata to event_view and event_listing views.
+  Fixes #2, fixes #57.
+  [thet]
+
+
+1.0b7 (2013-04-24)
+------------------
+
+- Don't show plone.app.event:default and
+  plone.app.event.ploneintegration:prepare profiles when creating a Plone site
+  with @@plone-addsite.
+  [thet]
+
+- Remove render_cachekey from portlet_events, since it depends on an
+  undocumented internal _data structure, which must contain catalog brains.
+  [thet]
+
+- In tests, use AbstractSampleDataEvents as base class for tests, which depend
+  on AT or DX event content.
+  [thet]
+
+- Introduce create and edit functions in IEventAccessor objects.
+  [thet]
+
+- API Refactorings. In base.py:
+    * get_portal_events and get_occurrences_from_brains combined to get_events.
+    * get_occurrences_by_date refactored to construct_calendar.
+    * Renamings:
+        - default_start_dt -> default_start,
+        - default_end_dt -> default_end,
+        - cal_to_strftime_wkday -> wkday_to_mon1,
+        - strftime_to_cal_wkday -> wkday_to_mon0.
+
+    * Remove:
+        - default_start_DT (use DT(default_start()) instead),
+        - default_end_DT (use DT(default_end()) instead),
+        - first_weekday_sun0 (use wkday_to_mon1(first_weekday()) instead),
+        - default_tzinfo (use default_timezone(as_tzinfo=True) instead).
+
+  In ical:
+    * Renamed construct_calendar to construct_icalendar to avoid same name as
+      in base.py.
+
+  BBB code will be removed with 1.0.
+  [thet]
+
+- Update translations and translate event_view and event_listing.
+  [thet]
+
+- Configure event_listing to be an available view on Collections, Folders,
+  Plone Sites and Topics.
+  [thet]
+
+- Depend on plone.app.dextterity in ZCML, so that all DublinCore metadata
+  behaviors are set up correctly.
+  [thet]
+
+- Backport from seanupton: IObjectModifiedEvent subscriber returns early on
+  newly created event (Commit c60c8b521c6b1ca219bfeaddb08e26605707e17 on
+  https://github.com/seanupton/plone.app.event).
+  [seanupton]
+
+- Calendar portlet tooltips css optimizations: max-with and z-index.
+  [thet]
+
+- Add Brazilian Portuguese translation
+  [ericof]
+
+- Add ical import feature, register action to enable it and add a object tab to
+  the @@ical_import_settings form. .ics files can be uploaded or fetched from
+  the net from other calendar servers.
+  [thet]
+
+- Since more ical related code is upcoming (importer), add ical subpackage and
+  move ical related code in here.
+  [thet]
+
+- When exporting whole_day/all day events to icalendar, let them end a day
+  after at midnight instead on the defined day one second before midnight. This
+  behavior is the preferred method of exporting all day events to icalendar.
+  [thet]
+
 - Additionally to the 'date' parameter, allow passing of year, month and day
   query string parameters to the event_listing view and automatically set the
   mode to 'day' if a date was passed.
@@ -11,11 +165,11 @@ Changelog
 
 - Backport from plone.app.portlets: Don't fail on invalid (ambigous) date
   information in request (Commit a322676 on plone.app.portlets).
-  [tomgross, thet]
+  [tomgross]
 
 - Backport from plone.app.portlets: Use str view names for getMultiAdapter
   calls (commit c296408 on plone.app.portlets).
-  [wichert, thet]
+  [wichert]
 
 
 1.0b6 (2013-02-14)

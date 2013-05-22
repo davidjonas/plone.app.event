@@ -1,73 +1,65 @@
 Installation
 ============
 
-.. note::
-  Please set your timezone in the @@event-settings controlpanel. Otherwise
-  there some weired behavior can occur, like you're apparently unable to set
-  the time for dexterity types not to what you want.  For timezone handling, we
-  use pytz.
+Depend on 'plone.app.event [dexterity]' or 'plone.app.event [archetypes]' or
+both in your setup.py or buildout configuration.
 
+You don't have to depend on plone.app.event in your configure.zcml, but if you
+want to do so to make things explicit, just include the plone.app.event package
+and no subpackage, as they are loaded automatically::
 
-Installation for Plone 4.2
---------------------------
-
-Just run the buildout.cfg, which is included with plone.app.event. There is
-also a dev.cfg buildout file, which includes the sources of Plone core
-package branches with integration changes for plone.app.event.
-
-Or include the plone.app.event egg::
-
-  eggs +=
-      plone.app.event [ploneintegration,archetypes,dexterity]
-
-Last, instal Plone with the "plone.app.event Plone4 integration" profile or
-depend in Generic Setup in metadata.xml like so::
-
-  <dependency>profile-plone.app.event.ploneintegration:default</dependency>
-
-You can also install optionally or additionally the dexterity profile.
-
-
-.. warning::
-  Upgrading from the old ATEvent type is not tested, so don't rely on this.
-
-Add some events, play with recurrence, whole day events and timezones, try out
-the calendar and event portlets...
-
+    <include package="plone.app.event"/>
 
 .. note::
-  A limitation on recurrence is, that unlimited occurrences are not supported
-  at the moment. The number of possible recurrences of an event is limited to
-  1000 at the moment, so indexing - and other operations - doesn't take too
-  long (see: plone.event.recurrence).
+  After installation, please set your timezone in the @@event-settings
+  controlpanel. Otherwise there some weired behavior can occur, like you're
+  apparently unable to set the time for dexterity types not to what you want.
+  For timezone handling, we use pytz.
+
+.. note::
+
+  Unlimited occurrences are not supported at the moment. The number of possible
+  recurrences of an event is limited to 1000 occurrences. This way, indexing
+  and other operations doesn't take too long.  The maximum number of
+  occurrences is set via the ``MAXCOUNT`` constant in
+  ``plone.event.recurrence``.
 
 
-Upgrading from previous versions of the plone.app.event ATEvent type
---------------------------------------------------------------------
+Using plone.app.event before Plone 4.4
+--------------------------------------
 
-If you have used plone.app.event before, it's good to know following things:
+If you want to install plone.app.event before Plone 4.4 (where it's included in
+core), also depend on the ploneintegration extra: 'plone.app.event [archetypes,
+ploneintegration]' (again, and/or 'dexterity').
 
-- The ATEvent type now implements plone.app.event.at.interfaces.IATEvent, which
-  itself derives from Products.ATContentTypes.interfaces.IATEvent. In order to
-  get the object_provides catalog metadata updated, please clear and rebuild
-  your catalog.
+Then - don't forget - run the plone.app.event.ploneintegration:default profile
+once to re-register portlets, re-adding the DateRecurringIndex for start and
+end indices and so on.
 
-- The ATEvent fields "recurrence", "timezone" and "wholeDay" now do not have
-  ATFieldProperty definitions anymore and aren't stored in Annotations but
-  directly on the context. The change was neccasary for the timezone field,
-  since we had to implement a custom setter. Besides, it avoids confusion, that
-  wholeDay has to be set as wholeDay for invokeFactory but as whole_day on the
-  context itself.  There is an upgrade step, addressing this change ("Upgrade
-  to plone.app.event beta2", from metadata version 2 to 3).
+.. note::
+  Run the "ploneintegration" profile only once (or after whole site-profiles
+  are re-applied). Otherwise you have to clear and rebuild the index every
+  time, because the start and end indices are removed and re-added
+
+.. note::
+  Currently the package ``z3c.unconfigure`` depends on ``zope.configuration >=
+  3.8`` but Plone 4.2.4 uses zope.configuration 3.7.4. To successfully install
+  plone.app.event with it's ploneintegration extra, you have to make a version
+  fix in your buildout. Wether fix z3c.unconfigure to 1.0.1 (recommended and
+  included in this buildout) or fix zope.configuration for example to 4.0.2
+  (not backwards-compatible).
 
 
 Upgrading from Products.ATContentType to plone.app.event
 --------------------------------------------------------
 
+.. warning::
+  Content upgrades from the old ATEvent type are experimental, so don't rely
+  on this.
+
 If you want to upgrade Products.ATContentTypes based ATEvents to
 plone.app.event ones, there is an upgrade step for that: "Upgrades old AT
 events to plone.app.events" (Metadata version 1 to 2).
 
-Please note, that this feature is still experimental. Please report any issues
-with upgrading from old ATEvent types here:
-https://github.com/plone/plone.app.event/issues
+Please note, that this feature is still experimental. Report any upgrade issues
+from old ATEvent types here: https://github.com/plone/plone.app.event/issues
