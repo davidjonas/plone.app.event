@@ -174,7 +174,7 @@ class Renderer(base.Renderer):
                            u'%s%s%s</a>'
                     events_string +=  base % (
                         accessor.url,
-                        accessor.title,
+                        accessor.title.decode('utf-8'),
                         not whole_day and u' %s' % time or u'',
                         not whole_day and location and u', ' or u'',
                         location and u' %s' % location or u'')

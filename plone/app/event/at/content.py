@@ -275,7 +275,10 @@ class ATEvent(ATCTContent, HistoryAwareMixin):
         # Always get the date in event's timezone
         timezone = self.getField('timezone').get(self)
         dt = self.getField(field).get(self)
-        return dt.toZone(timezone)
+        if dt is not None:
+            return dt.toZone(timezone)
+        else:
+            return None
 
     def _dt_setter(self, fieldtoset, value, **kwargs):
         # Always set the date in UTC, saving the timezone in another field.
@@ -354,7 +357,10 @@ class ATEvent(ATCTContent, HistoryAwareMixin):
         :rtype: Python timedelta
 
         """
-        return self.end_date - self.start_date
+        if self.end_date is not None and self.start_date is not None:
+            return self.end_date - self.start_date
+        else:
+            return 0
 
 
     # TODO: Why is this needed?
